@@ -293,6 +293,11 @@ def main():
     api_key = llm_config.get("api_key", "local")
     model_name = llm_config.get("model_name", "local-model")
 
+    # Load custom review prompts or use defaults from review_prompts.txt
+    prompts_config = config.get("prompts", {})
+    review_sys = prompts_config.get("review_system_prompt") or REVIEW_SYSTEM_PROMPT
+    review_usr = prompts_config.get("review_user_prompt") or REVIEW_USER_PROMPT
+
     generation_config = config.get("generation", {})
     batch_size = generation_config.get("review_batch_size", 25)
     max_tokens = generation_config.get("max_tokens", 8000)
@@ -338,6 +343,8 @@ def main():
             client, model_name, batch, i, total_batches,
             previous_tail=previous_tail,
             source_context=None,  # Mode 2: would pass source text chunk here
+            system_prompt=review_sys,
+            user_prompt_template=review_usr,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,

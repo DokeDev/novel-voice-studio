@@ -20,6 +20,7 @@ import aiofiles
 # Import ProjectManager
 from project import ProjectManager
 from default_prompts import DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT, load_default_prompts
+from review_prompts import load_review_prompts
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -122,6 +123,8 @@ class GenerationConfig(BaseModel):
 class PromptConfig(BaseModel):
     system_prompt: Optional[str] = None
     user_prompt: Optional[str] = None
+    review_system_prompt: Optional[str] = None
+    review_user_prompt: Optional[str] = None
 
 class AppConfig(BaseModel):
     llm: LLMConfig
@@ -311,6 +314,12 @@ async def get_config():
         sys_prompt, usr_prompt = load_default_prompts()
         default_config["prompts"]["system_prompt"] = sys_prompt
         default_config["prompts"]["user_prompt"] = usr_prompt
+        try:
+            rev_sys, rev_usr = load_review_prompts()
+            default_config["prompts"]["review_system_prompt"] = rev_sys
+            default_config["prompts"]["review_user_prompt"] = rev_usr
+        except RuntimeError:
+            pass
         config = default_config
     else:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -319,7 +328,14 @@ async def get_config():
     # Ensure prompts section exists with defaults from file
     if "prompts" not in config:
         sys_prompt, usr_prompt = load_default_prompts()
-        config["prompts"] = {"system_prompt": sys_prompt, "user_prompt": usr_prompt}
+        prompts = {"system_prompt": sys_prompt, "user_prompt": usr_prompt}
+        try:
+            rev_sys, rev_usr = load_review_prompts()
+            prompts["review_system_prompt"] = rev_sys
+            prompts["review_user_prompt"] = rev_usr
+        except RuntimeError:
+            pass
+        config["prompts"] = prompts
     else:
         if not config["prompts"].get("system_prompt") or not config["prompts"].get("user_prompt"):
             sys_prompt, usr_prompt = load_default_prompts()
@@ -327,6 +343,15 @@ async def get_config():
                 config["prompts"]["system_prompt"] = sys_prompt
             if not config["prompts"].get("user_prompt"):
                 config["prompts"]["user_prompt"] = usr_prompt
+        if not config["prompts"].get("review_system_prompt") or not config["prompts"].get("review_user_prompt"):
+            try:
+                rev_sys, rev_usr = load_review_prompts()
+                if not config["prompts"].get("review_system_prompt"):
+                    config["prompts"]["review_system_prompt"] = rev_sys
+                if not config["prompts"].get("review_user_prompt"):
+                    config["prompts"]["review_user_prompt"] = rev_usr
+            except RuntimeError:
+                pass  # review_prompts.txt missing or malformed — leave fields empty
 
     # Include current input file info if available
     state_path = os.path.join(ROOT_DIR, "state.json")
@@ -345,10 +370,17 @@ async def get_config():
 @app.get("/api/default_prompts")
 async def get_default_prompts():
     system_prompt, user_prompt = load_default_prompts()
-    return {
+    result = {
         "system_prompt": system_prompt,
         "user_prompt": user_prompt
     }
+    try:
+        review_sys, review_usr = load_review_prompts()
+        result["review_system_prompt"] = review_sys
+        result["review_user_prompt"] = review_usr
+    except RuntimeError:
+        pass
+    return result
 
 @app.post("/api/config")
 async def save_config(config: AppConfig):
