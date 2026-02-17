@@ -243,7 +243,7 @@ Upload a text file and generate the annotated script. The LLM converts your book
 Review prompts are customizable in `review_prompts.txt` (same format as `default_prompts.txt`).
 
 ### Voices Tab
-After script generation, parse voices to see all speakers. For each:
+After script generation, voices are automatically loaded from the annotated script. For each speaker:
 
 **Custom Voice Mode:**
 - Select from 9 pre-trained voices: Aiden, Dylan, Eric, Ono_anna, Ryan, Serena, Sohee, Uncle_fu, Vivian
