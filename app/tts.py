@@ -98,6 +98,20 @@ class TTSEngine:
         import torch
         torch.cuda.empty_cache()
 
+    @staticmethod
+    def _reset_compile_cache():
+        """Reset torch.compile dynamo state to prevent guard accumulation.
+
+        torch.compile(dynamic=True) accumulates shape guards across calls.
+        With varying batch sizes and sequence lengths, the guard list grows
+        and CPU-side guard evaluation becomes a bottleneck, causing
+        progressive throughput degradation.  Resetting clears all in-memory
+        guards; the next call pays a one-time recompilation cost (fast due
+        to inductor disk cache) but prevents the slowdown from compounding.
+        """
+        import torch
+        torch._dynamo.reset()
+
     def _estimate_max_batch_size(self, model, clone_prompt_tokens=0,
                                 ref_text_chars=0, max_text_chars=0,
                                 max_new_tokens=2048):
@@ -770,6 +784,11 @@ class TTSEngine:
 
         if not chunks:
             return results
+
+        # Reset torch.compile state to prevent progressive slowdown
+        # from dynamo guard accumulation across batches
+        if self._compile_codec_enabled:
+            self._reset_compile_cache()
 
         # Separate chunks by voice type
         custom_chunks = []

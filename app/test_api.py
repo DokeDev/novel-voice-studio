@@ -77,6 +77,17 @@ def assert_key(data, key):
         raise TestFailure(f"Missing key '{key}' in: {json.dumps(data)[:300]}")
 
 
+def wait_for_task(task, timeout=120, poll_interval=2):
+    """Poll /api/status/{task} until it stops running or timeout is reached."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = requests.get(f"{BASE_URL}/api/status/{task}", timeout=10)
+        if r.status_code == 200 and not r.json().get("running"):
+            return True
+        time.sleep(poll_interval)
+    return False
+
+
 def get(path, **kwargs):
     return requests.get(f"{BASE_URL}{path}", timeout=30, **kwargs)
 
@@ -745,17 +756,17 @@ def test_generate_batch():
     data = r.json()
     if data.get("status") != "started":
         raise TestFailure(f"Expected status=started, got {data}")
+    # Wait for batch to finish so subsequent tests don't conflict
+    if not wait_for_task("audio", timeout=120):
+        raise TestFailure("generate_batch did not complete within 120s")
 
 
 def test_generate_batch_fast():
     if not shared.get("has_chunks"):
         raise TestFailure("SKIP: no chunks available")
-    # Wait for prior batch to finish
-    for _ in range(30):
-        r = get("/api/status/audio")
-        if not r.json().get("running"):
-            break
-        time.sleep(1)
+    # Wait for any prior generation to finish
+    if not wait_for_task("audio", timeout=120):
+        raise TestFailure("SKIP: prior audio generation did not finish in time")
     r = post("/api/generate_batch_fast", json={"indices": [0]})
     if r.status_code == 400:
         raise TestFailure("SKIP: audio generation already running")
