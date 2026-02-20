@@ -80,6 +80,19 @@ app.mount("/dataset_builder", StaticFiles(directory=DATASET_BUILDER_DIR), name="
 # Initialize Project Manager
 project_manager = ProjectManager(ROOT_DIR)
 
+# Reset any chunks stuck in "generating" from a prior interrupted session
+_startup_chunks = project_manager.load_chunks()
+if _startup_chunks:
+    _reset_count = 0
+    for chunk in _startup_chunks:
+        if chunk.get("status") == "generating":
+            chunk["status"] = "pending"
+            _reset_count += 1
+    if _reset_count:
+        project_manager.save_chunks(_startup_chunks)
+        print(f"Startup: reset {_reset_count} stuck 'generating' chunk(s) to 'pending'")
+    del _startup_chunks, _reset_count
+
 # CORS for development
 app.add_middleware(
     CORSMiddleware,
@@ -225,7 +238,7 @@ class DatasetBuilderUpdateRowsRequest(BaseModel):
 process_state = {
     "script": {"running": False, "logs": []},
     "voices": {"running": False, "logs": []},
-    "audio": {"running": False, "logs": []},
+    "audio": {"running": False, "logs": [], "cancel": False},
     "audacity_export": {"running": False, "logs": []},
     "review": {"running": False, "logs": []},
     "lora_training": {"running": False, "logs": []},
@@ -671,28 +684,35 @@ async def generate_batch_endpoint(request: BatchGenerateRequest, background_task
             f"Progress: {completed + failed}/{total} ({completed} done, {failed} failed)"
         )
 
+    def cancel_check():
+        return process_state["audio"]["cancel"]
+
     def task():
         process_state["audio"]["running"] = True
+        process_state["audio"]["cancel"] = False
         process_state["audio"]["logs"] = [
             f"Starting parallel generation of {total} chunks with {workers} workers..."
         ]
         try:
             results = project_manager.generate_chunks_parallel(
-                indices, workers, progress_callback
+                indices, workers, progress_callback, cancel_check=cancel_check
             )
             completed = len(results["completed"])
             failed = len(results["failed"])
-            process_state["audio"]["logs"].append(
-                f"Batch generation complete: {completed} succeeded, {failed} failed"
-            )
+            cancelled = results.get("cancelled", 0)
+            msg = f"Batch generation complete: {completed} succeeded, {failed} failed"
+            if cancelled:
+                msg += f", {cancelled} cancelled"
+            process_state["audio"]["logs"].append(msg)
             if results["failed"]:
-                for idx, msg in results["failed"]:
-                    process_state["audio"]["logs"].append(f"  Chunk {idx} failed: {msg}")
+                for idx, err in results["failed"]:
+                    process_state["audio"]["logs"].append(f"  Chunk {idx} failed: {err}")
         except Exception as e:
             logger.error(f"Batch generation error: {e}")
             process_state["audio"]["logs"].append(f"Batch generation error: {e}")
         finally:
             process_state["audio"]["running"] = False
+            process_state["audio"]["cancel"] = False
 
     background_tasks.add_task(task)
     return {"status": "started", "workers": workers, "total_chunks": total}
@@ -729,8 +749,12 @@ async def generate_batch_fast_endpoint(request: BatchGenerateRequest, background
             f"Progress: {completed + failed}/{total} ({completed} done, {failed} failed)"
         )
 
+    def cancel_check():
+        return process_state["audio"]["cancel"]
+
     def task():
         process_state["audio"]["running"] = True
+        process_state["audio"]["cancel"] = False
         process_state["audio"]["logs"] = [
             f"Starting batch generation of {total} chunks (batch_size={batch_size}, seed={batch_seed})..."
         ]
@@ -738,23 +762,46 @@ async def generate_batch_fast_endpoint(request: BatchGenerateRequest, background
             results = project_manager.generate_chunks_batch(
                 indices, batch_seed, batch_size, progress_callback,
                 batch_group_by_type=batch_group_by_type,
+                cancel_check=cancel_check,
             )
             completed = len(results["completed"])
             failed = len(results["failed"])
-            process_state["audio"]["logs"].append(
-                f"Batch generation complete: {completed} succeeded, {failed} failed"
-            )
+            cancelled = results.get("cancelled", 0)
+            msg = f"Batch generation complete: {completed} succeeded, {failed} failed"
+            if cancelled:
+                msg += f", {cancelled} cancelled"
+            process_state["audio"]["logs"].append(msg)
             if results["failed"]:
-                for idx, msg in results["failed"]:
-                    process_state["audio"]["logs"].append(f"  Chunk {idx} failed: {msg}")
+                for idx, err in results["failed"]:
+                    process_state["audio"]["logs"].append(f"  Chunk {idx} failed: {err}")
         except Exception as e:
             logger.error(f"Batch generation error: {e}")
             process_state["audio"]["logs"].append(f"Batch generation error: {e}")
         finally:
             process_state["audio"]["running"] = False
+            process_state["audio"]["cancel"] = False
 
     background_tasks.add_task(task)
     return {"status": "started", "batch_seed": batch_seed, "batch_size": batch_size, "total_chunks": total}
+
+@app.post("/api/cancel_audio")
+async def cancel_audio():
+    """Cancel ongoing audio generation and reset in-progress chunks."""
+    if process_state["audio"]["running"]:
+        process_state["audio"]["cancel"] = True
+        process_state["audio"]["logs"].append("[CANCEL] Cancellation requested")
+        return {"status": "cancelling"}
+    # Not running — still reset any stuck "generating" chunks (e.g. from a crash)
+    chunks = project_manager.load_chunks()
+    if chunks:
+        reset_count = 0
+        for chunk in chunks:
+            if chunk.get("status") == "generating":
+                chunk["status"] = "pending"
+                reset_count += 1
+        if reset_count:
+            project_manager.save_chunks(chunks)
+    return {"status": "not_running", "reset_chunks": reset_count if chunks else 0}
 
 ## ── Saved Scripts ──────────────────────────────────────────────
 

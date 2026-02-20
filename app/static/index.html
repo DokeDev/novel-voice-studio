@@ -1856,11 +1856,17 @@
             }
         };
 
-        window.cancelRender = () => {
+        window.cancelRender = async (skipApi = false) => {
             isRenderingAll = false;
             document.getElementById('btn-batch-fast').style.display = 'inline-block';
             document.getElementById('btn-regen-all').style.display = 'inline-block';
             document.getElementById('btn-cancel-render').style.display = 'none';
+            if (!skipApi) {
+                try {
+                    await API.post('/api/cancel_audio', {});
+                    await loadChunks(false);
+                } catch (e) { console.error('Cancel error:', e); }
+            }
         };
 
         window.renderAll = async (regenerateAll = false) => {
@@ -1876,12 +1882,12 @@
 
                 if (toProcess.length === 0) {
                     showToast("No non-empty chunks to render!", 'warning');
-                    cancelRender();
+                    cancelRender(true);
                     return;
                 }
 
                 if (regenerateAll && !await showConfirm(`Regenerate all ${toProcess.length} non-empty chunks? This will replace existing audio.`)) {
-                    cancelRender();
+                    cancelRender(true);
                     return;
                 }
 
@@ -1921,7 +1927,7 @@
                             clearInterval(pollInterval);
                             // Clear highlights
                             document.querySelectorAll('tr').forEach(r => r.classList.remove('table-info'));
-                            cancelRender();
+                            cancelRender(true);
                             await loadChunks(false);
 
                             // Show completion summary
@@ -1939,7 +1945,7 @@
             } catch (e) {
                 console.error("Render All error:", e);
                 showToast("Error during batch rendering: " + e.message, 'error');
-                cancelRender();
+                cancelRender(true);
             }
         };
 
@@ -1956,7 +1962,7 @@
 
                 if (toProcess.length === 0) {
                     showToast("No non-empty chunks to render!", 'warning');
-                    cancelRender();
+                    cancelRender(true);
                     return;
                 }
 
@@ -1995,7 +2001,7 @@
                         if (stillGenerating.length === 0) {
                             clearInterval(pollInterval);
                             document.querySelectorAll('tr').forEach(r => r.classList.remove('table-info'));
-                            cancelRender();
+                            cancelRender(true);
                             await loadChunks(false);
 
                             const completed = updated.filter(c => indices.includes(c.id) && c.status === 'done').length;
@@ -2012,7 +2018,7 @@
             } catch (e) {
                 console.error("Batch Fast error:", e);
                 showToast("Error during batch rendering: " + e.message, 'error');
-                cancelRender();
+                cancelRender(true);
             }
         };
 

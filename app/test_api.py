@@ -776,6 +776,15 @@ def test_generate_batch_fast():
         raise TestFailure(f"Expected status=started, got {data}")
 
 
+def test_cancel_audio():
+    """Cancel endpoint works when nothing is running (resets stuck chunks)."""
+    r = post("/api/cancel_audio", json={})
+    assert_status(r, 200)
+    data = r.json()
+    if data.get("status") not in ("not_running", "cancelling"):
+        raise TestFailure(f"Expected status not_running or cancelling, got {data}")
+
+
 def test_export_audacity():
     r = post("/api/export_audacity")
     if r.status_code == 400:
@@ -925,6 +934,7 @@ def run_all_tests():
     run_test("generate_chunk", test_generate_chunk, requires_full=True)
     run_test("generate_batch", test_generate_batch, requires_full=True)
     run_test("generate_batch_fast", test_generate_batch_fast, requires_full=True)
+    run_test("cancel_audio", test_cancel_audio)
     run_test("export_audacity", test_export_audacity, requires_full=True)
 
     section("LoRA (TTS)")

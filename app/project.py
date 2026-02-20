@@ -498,7 +498,8 @@ class ProjectManager:
 
         return True, zip_path
 
-    def generate_chunks_parallel(self, indices, max_workers=2, progress_callback=None):
+    def generate_chunks_parallel(self, indices, max_workers=2, progress_callback=None,
+                                  cancel_check=None):
         """Generate multiple chunks in parallel using ThreadPoolExecutor.
 
         Uses individual TTS API calls with per-speaker voice settings.
@@ -507,13 +508,14 @@ class ProjectManager:
             indices: List of chunk indices to generate
             max_workers: Number of concurrent TTS workers
             progress_callback: Optional callback(completed, failed, total) for progress updates
+            cancel_check: Optional callable returning True when cancellation is requested
 
         Returns:
-            dict with 'completed' and 'failed' lists
+            dict with 'completed', 'failed', and 'cancelled' keys
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        results = {"completed": [], "failed": []}
+        results = {"completed": [], "failed": [], "cancelled": 0}
 
         # Filter out empty-text chunks
         chunks = self.load_chunks()
@@ -533,7 +535,14 @@ class ProjectManager:
                 for idx in indices
             }
 
+            cancelled = False
             for future in as_completed(futures):
+                if cancel_check and cancel_check():
+                    cancelled = True
+                    print("[CANCEL] Cancellation requested — stopping parallel generation")
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+
                 idx = futures[future]
                 try:
                     success, msg = future.result()
@@ -550,7 +559,19 @@ class ProjectManager:
                 if progress_callback:
                     progress_callback(len(results["completed"]), len(results["failed"]), total)
 
-        print(f"Parallel generation complete: {len(results['completed'])} succeeded, {len(results['failed'])} failed")
+            # Reset remaining "generating" chunks to "pending"
+            if cancelled:
+                done_indices = set(results["completed"]) | {idx for idx, _ in results["failed"]}
+                chunks = self.load_chunks()
+                if chunks:
+                    for idx in indices:
+                        if idx not in done_indices and 0 <= idx < len(chunks) and chunks[idx].get("status") == "generating":
+                            chunks[idx]["status"] = "pending"
+                            results["cancelled"] += 1
+                    self.save_chunks(chunks)
+
+        print(f"Parallel generation complete: {len(results['completed'])} succeeded, "
+              f"{len(results['failed'])} failed, {results['cancelled']} cancelled")
         return results
 
     def _group_indices_by_voice_type(self, indices, chunks, voice_config):
@@ -596,7 +617,7 @@ class ProjectManager:
         return reordered
 
     def generate_chunks_batch(self, indices, batch_seed=-1, batch_size=4, progress_callback=None,
-                               batch_group_by_type=False):
+                               batch_group_by_type=False, cancel_check=None):
         """Generate multiple chunks using batch TTS API with a single seed.
 
         Args:
@@ -606,11 +627,12 @@ class ProjectManager:
             progress_callback: Optional callback(completed, failed, total) for progress updates
             batch_group_by_type: Group indices by voice type before batching for
                 GPU efficiency. When False, indices are batched in sequential order.
+            cancel_check: Optional callable returning True when cancellation is requested
 
         Returns:
-            dict with 'completed' and 'failed' lists
+            dict with 'completed', 'failed', and 'cancelled' keys
         """
-        results = {"completed": [], "failed": []}
+        results = {"completed": [], "failed": [], "cancelled": 0}
 
         # Load chunks and voice config
         chunks = self.load_chunks()
@@ -654,7 +676,13 @@ class ProjectManager:
         batches = [indices[i:i + batch_size] for i in range(0, len(indices), batch_size)]
         print(f"Processing {len(batches)} batches...")
 
+        cancelled = False
         for batch_num, batch_indices in enumerate(batches):
+            if cancel_check and cancel_check():
+                cancelled = True
+                print(f"[CANCEL] Cancellation requested before batch {batch_num + 1}")
+                break
+
             print(f"Batch {batch_num + 1}/{len(batches)}: {len(batch_indices)} chunks")
 
             # Build batch request data
@@ -752,5 +780,17 @@ class ProjectManager:
             if progress_callback:
                 progress_callback(len(results["completed"]), len(results["failed"]), total)
 
-        print(f"Batch generation complete: {len(results['completed'])} succeeded, {len(results['failed'])} failed")
+        # Reset remaining "generating" chunks to "pending" on cancel or completion
+        done_indices = set(results["completed"]) | {idx for idx, _ in results["failed"]}
+        chunks = self.load_chunks()
+        if chunks:
+            for idx in indices:
+                if idx not in done_indices and 0 <= idx < len(chunks) and chunks[idx].get("status") == "generating":
+                    chunks[idx]["status"] = "pending"
+                    results["cancelled"] += 1
+            if results["cancelled"]:
+                self.save_chunks(chunks)
+
+        print(f"Batch generation complete: {len(results['completed'])} succeeded, "
+              f"{len(results['failed'])} failed, {results['cancelled']} cancelled")
         return results
