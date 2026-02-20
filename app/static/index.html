@@ -698,9 +698,9 @@
                         <tr>
                             <td class="text-center align-top" style="min-width:110px;"><button class="btn btn-primary btn-sm w-100" id="btn-play-seq" onclick="playSequence()"><i class="fas fa-play me-1"></i>Play Sequence</button></td>
                             <td class="align-middle text-muted px-1">|</td>
-                            <td class="text-center align-top" style="min-width:120px;"><button class="btn btn-success btn-sm w-100" id="btn-batch-fast" onclick="renderBatchFast(false)"><i class="fas fa-bolt me-1"></i>Render Pending</button></td>
+                            <td class="text-center align-top" style="min-width:120px;"><button class="btn btn-success btn-sm w-100" id="btn-batch-fast" onclick="startRender(false)"><i class="fas fa-bolt me-1"></i>Render Pending</button></td>
                             <td class="align-middle text-muted px-1">|</td>
-                            <td class="text-center align-top" style="min-width:120px;"><button class="btn btn-outline-success btn-sm w-100" id="btn-regen-all" onclick="renderBatchFast(true)"><i class="fas fa-redo me-1"></i>Regenerate All</button></td>
+                            <td class="text-center align-top" style="min-width:120px;"><button class="btn btn-outline-success btn-sm w-100" id="btn-regen-all" onclick="startRender(true)"><i class="fas fa-redo me-1"></i>Regenerate All</button></td>
                             <td class="text-center align-top"><button class="btn btn-danger btn-sm w-100" id="btn-cancel-render" onclick="cancelRender()" style="display:none;"><i class="fas fa-stop me-1"></i>Cancel</button></td>
                             <td class="align-middle text-muted px-1">|</td>
                             <td class="text-center align-top" style="min-width:100px;"><button class="btn btn-warning btn-sm w-100" id="btn-merge"><i class="fas fa-file-audio me-1"></i>Merge All</button></td>
@@ -1866,6 +1866,15 @@
                     await API.post('/api/cancel_audio', {});
                     await loadChunks(false);
                 } catch (e) { console.error('Cancel error:', e); }
+            }
+        };
+
+        window.startRender = (regenerateAll = false) => {
+            const mode = document.getElementById('tts-mode').value;
+            if (mode === 'external') {
+                renderAll(regenerateAll);
+            } else {
+                renderBatchFast(regenerateAll);
             }
         };
 
