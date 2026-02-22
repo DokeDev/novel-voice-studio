@@ -74,7 +74,7 @@ class TTSEngine:
         self._lora_adapter_path = None  # track which adapter is currently loaded
         self._gradio_client = None
 
-        # Clone prompt cache: speaker_name -> reusable voice_clone_prompt
+        # Clone prompt cache: speaker_name -> (ref_audio_path, reusable voice_clone_prompt)
         self._clone_prompt_cache = {}
         # LoRA clone prompt cache: adapter_path -> reusable voice_clone_prompt
         self._lora_prompt_cache = {}
@@ -499,9 +499,6 @@ class TTSEngine:
 
     def _get_clone_prompt(self, speaker, voice_config):
         """Get or create a cached voice clone prompt for a speaker."""
-        if speaker in self._clone_prompt_cache:
-            return self._clone_prompt_cache[speaker]
-
         voice_data = voice_config.get(speaker, {})
         ref_audio_path = voice_data.get("ref_audio")
         ref_text = voice_data.get("ref_text")
@@ -514,6 +511,13 @@ class TTSEngine:
             ref_audio_path = os.path.join(root_dir, ref_audio_path)
         if not os.path.exists(ref_audio_path):
             raise FileNotFoundError(f"Reference audio not found for '{speaker}': {ref_audio_path}")
+
+        # Check cache — invalidate if ref_audio changed
+        if speaker in self._clone_prompt_cache:
+            cached_path, cached_prompt = self._clone_prompt_cache[speaker]
+            if cached_path == ref_audio_path:
+                return cached_prompt
+            print(f"Voice changed for '{speaker}', rebuilding clone prompt...")
 
         model = self._init_local_clone()
 
@@ -528,7 +532,7 @@ class TTSEngine:
             ref_audio=(audio_array, sample_rate),
             ref_text=ref_text,
         )
-        self._clone_prompt_cache[speaker] = prompt
+        self._clone_prompt_cache[speaker] = (ref_audio_path, prompt)
         print(f"Clone prompt cached for '{speaker}'.")
         return prompt
 
