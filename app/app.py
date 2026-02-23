@@ -41,6 +41,7 @@ UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 SCRIPTS_DIR = os.path.join(ROOT_DIR, "scripts")
 CHUNKS_PATH = os.path.join(ROOT_DIR, "chunks.json")
 DESIGNED_VOICES_DIR = os.path.join(ROOT_DIR, "designed_voices")
+CLONE_VOICES_DIR = os.path.join(ROOT_DIR, "clone_voices")
 LORA_MODELS_DIR = os.path.join(ROOT_DIR, "lora_models")
 LORA_DATASETS_DIR = os.path.join(ROOT_DIR, "lora_datasets")
 BUILTIN_LORA_DIR = os.path.join(ROOT_DIR, "builtin_lora")
@@ -50,6 +51,7 @@ DATASET_BUILDER_DIR = os.path.join(ROOT_DIR, "dataset_builder")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(SCRIPTS_DIR, exist_ok=True)
 os.makedirs(DESIGNED_VOICES_DIR, exist_ok=True)
+os.makedirs(CLONE_VOICES_DIR, exist_ok=True)
 os.makedirs(LORA_MODELS_DIR, exist_ok=True)
 os.makedirs(LORA_DATASETS_DIR, exist_ok=True)
 os.makedirs(DATASET_BUILDER_DIR, exist_ok=True)
@@ -66,6 +68,9 @@ app.mount("/voicelines", StaticFiles(directory=VOICELINES_DIR), name="voicelines
 
 # Designed voices directory for voice designer feature
 app.mount("/designed_voices", StaticFiles(directory=DESIGNED_VOICES_DIR), name="designed_voices")
+
+# Clone voices directory for user-uploaded reference audio
+app.mount("/clone_voices", StaticFiles(directory=CLONE_VOICES_DIR), name="clone_voices")
 
 # LoRA models directory for trained adapter test audio
 app.mount("/lora_models", StaticFiles(directory=LORA_MODELS_DIR), name="lora_models")
@@ -987,6 +992,65 @@ async def voice_design_delete(voice_id: str):
     _save_manifest(DESIGNED_VOICES_MANIFEST, manifest)
 
     logger.info(f"Designed voice deleted: {voice_id}")
+    return {"status": "deleted", "voice_id": voice_id}
+
+## ── Clone Voice Uploads ───────────────────────────────────────
+
+CLONE_VOICES_MANIFEST = os.path.join(CLONE_VOICES_DIR, "manifest.json")
+ALLOWED_AUDIO_EXTS = {".wav", ".mp3", ".flac", ".ogg"}
+
+@app.get("/api/clone_voices/list")
+async def clone_voices_list():
+    """List all uploaded clone voices."""
+    return _load_manifest(CLONE_VOICES_MANIFEST)
+
+@app.post("/api/clone_voices/upload")
+async def clone_voices_upload(file: UploadFile = File(...)):
+    """Upload an audio file for voice cloning."""
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_AUDIO_EXTS:
+        raise HTTPException(status_code=400, detail=f"Unsupported format. Use: {', '.join(ALLOWED_AUDIO_EXTS)}")
+
+    base_name = os.path.splitext(file.filename)[0]
+    safe_name = _sanitize_name(base_name)
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    voice_id = f"{safe_name}_{int(time.time())}"
+    dest_filename = f"{voice_id}{ext}"
+    dest_path = os.path.join(CLONE_VOICES_DIR, dest_filename)
+
+    async with aiofiles.open(dest_path, "wb") as out_file:
+        content = await file.read()
+        await out_file.write(content)
+
+    manifest = _load_manifest(CLONE_VOICES_MANIFEST)
+    manifest.append({
+        "id": voice_id,
+        "name": base_name,
+        "filename": dest_filename,
+    })
+    _save_manifest(CLONE_VOICES_MANIFEST, manifest)
+
+    logger.info(f"Clone voice uploaded: '{base_name}' as {dest_filename}")
+    return {"status": "uploaded", "voice_id": voice_id, "filename": dest_filename}
+
+@app.delete("/api/clone_voices/{voice_id}")
+async def clone_voices_delete(voice_id: str):
+    """Delete an uploaded clone voice."""
+    manifest = _load_manifest(CLONE_VOICES_MANIFEST)
+    entry = next((v for v in manifest if v["id"] == voice_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Clone voice not found")
+
+    wav_path = os.path.join(CLONE_VOICES_DIR, entry["filename"])
+    if os.path.exists(wav_path):
+        os.remove(wav_path)
+
+    manifest = [v for v in manifest if v["id"] != voice_id]
+    _save_manifest(CLONE_VOICES_MANIFEST, manifest)
+
+    logger.info(f"Clone voice deleted: {voice_id}")
     return {"status": "deleted", "voice_id": voice_id}
 
 ## ── LoRA Training ──────────────────────────────────────────────

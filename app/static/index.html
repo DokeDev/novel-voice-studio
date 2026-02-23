@@ -1252,17 +1252,30 @@
 
                                 <!-- Clone Options -->
                                 <div class="clone-opts" style="display: ${voiceType === 'clone' ? 'block' : 'none'}">
-                                    <div class="row g-2 mb-2">
-                                        <div class="col-md-6">
+                                    <div class="row g-2 mb-2 align-items-center">
+                                        <div class="col">
                                             <select class="form-select designed-voice-select" onchange="onDesignedVoiceSelect(this)">
-                                                <option value="">-- Select designed voice or enter manually --</option>
-                                                ${(window._designedVoicesCache || []).map(v => `<option value="${v.id}" ${config.ref_audio && config.ref_audio.includes(v.filename) ? 'selected' : ''}>${v.name}</option>`).join('')}
-                                                <option value="__manual__" ${config.ref_audio && !(window._designedVoicesCache || []).some(v => config.ref_audio.includes(v.filename)) && config.ref_audio ? 'selected' : ''}>Custom path...</option>
+                                                <option value="">-- Select voice or enter path manually --</option>
+                                                ${(window._cloneVoicesCache || []).length ? `<optgroup label="Uploaded Voices">
+                                                    ${(window._cloneVoicesCache || []).map(v => `<option value="clone:${v.id}" ${config.ref_audio && config.ref_audio.includes(v.filename) ? 'selected' : ''}>${v.name}</option>`).join('')}
+                                                </optgroup>` : ''}
+                                                ${(window._designedVoicesCache || []).length ? `<optgroup label="Designed Voices">
+                                                    ${(window._designedVoicesCache || []).map(v => `<option value="design:${v.id}" ${config.ref_audio && config.ref_audio.includes(v.filename) ? 'selected' : ''}>${v.name}</option>`).join('')}
+                                                </optgroup>` : ''}
+                                                <option value="__manual__" ${config.ref_audio && !(window._cloneVoicesCache || []).some(v => config.ref_audio.includes(v.filename)) && !(window._designedVoicesCache || []).some(v => config.ref_audio.includes(v.filename)) && config.ref_audio ? 'selected' : ''}>Custom path...</option>
                                             </select>
+                                        </div>
+                                        <div class="col-auto">
+                                            <button class="btn btn-sm btn-outline-primary" onclick="uploadCloneVoice(this)" title="Upload audio file"><i class="fas fa-upload"></i> Upload</button>
+                                            <input type="file" class="clone-voice-file-input" accept=".wav,.mp3,.flac,.ogg" style="display:none" onchange="handleCloneVoiceUpload(this)">
                                         </div>
                                     </div>
                                     <input type="text" class="form-control ref-text mb-2" placeholder="Reference Text" value="${config.ref_text || ''}">
-                                    <input type="text" class="form-control ref-audio" placeholder="Path to audio file" value="${config.ref_audio || ''}" ${config.ref_audio && (window._designedVoicesCache || []).some(v => config.ref_audio.includes(v.filename)) ? 'readonly' : ''}>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control ref-audio" placeholder="Path to audio file" value="${config.ref_audio || ''}" ${config.ref_audio && ((window._cloneVoicesCache || []).some(v => config.ref_audio.includes(v.filename)) || (window._designedVoicesCache || []).some(v => config.ref_audio.includes(v.filename))) ? 'readonly' : ''}>
+                                        <button class="btn btn-sm btn-outline-secondary clone-play-btn" onclick="playCloneVoice(this)" title="Play reference audio" style="display:${config.ref_audio ? 'inline-block' : 'none'}"><i class="fas fa-play"></i></button>
+                                        <button class="btn btn-sm btn-outline-danger clone-delete-btn" onclick="deleteCloneVoice(this)" title="Delete uploaded voice" style="display:${config.ref_audio && (window._cloneVoicesCache || []).some(v => config.ref_audio.includes(v.filename)) ? 'inline-block' : 'none'}"><i class="fas fa-trash"></i></button>
+                                    </div>
                                 </div>
 
                                 <!-- LoRA Options -->
@@ -1303,11 +1316,13 @@
         };
 
         async function loadVoices() {
-            // Refresh designed voices cache so clone dropdown is populated
+            // Refresh voice caches so dropdowns are populated
             try {
                 window._designedVoicesCache = await API.get('/api/voice_design/list');
             } catch (e) { /* ignore if designer not available */ }
-            // Refresh LoRA models cache so adapter dropdown is populated
+            try {
+                window._cloneVoicesCache = await API.get('/api/clone_voices/list');
+            } catch (e) { /* ignore if no uploads */ }
             try {
                 window._loraModelsCache = await API.get('/api/lora/models');
             } catch (e) { /* ignore if no adapters */ }
@@ -2219,6 +2234,7 @@
 
         // --- Voice Designer ---
         window._designedVoicesCache = [];
+        window._cloneVoicesCache = [];
         window._currentPreviewFile = null;
 
         async function loadDesignedVoices() {
@@ -2326,6 +2342,8 @@
             const card = select.closest('.card-body');
             const refText = card.querySelector('.ref-text');
             const refAudio = card.querySelector('.ref-audio');
+            const playBtn = card.querySelector('.clone-play-btn');
+            const deleteBtn = card.querySelector('.clone-delete-btn');
             const val = select.value;
 
             if (val === '' || val === '__manual__') {
@@ -2334,19 +2352,103 @@
                     refAudio.value = '';
                     refText.value = '';
                 }
+                if (playBtn) playBtn.style.display = 'none';
+                if (deleteBtn) deleteBtn.style.display = 'none';
                 refAudio.focus();
                 return;
             }
 
-            // Find the designed voice
-            const voice = window._designedVoicesCache.find(v => v.id === val);
-            if (voice) {
-                // Use absolute path relative to project root
-                refAudio.value = `designed_voices/${voice.filename}`;
-                refText.value = voice.sample_text;
-                refAudio.readOnly = true;
+            if (val.startsWith('clone:')) {
+                const voiceId = val.substring(6);
+                const voice = (window._cloneVoicesCache || []).find(v => v.id === voiceId);
+                if (voice) {
+                    refAudio.value = `clone_voices/${voice.filename}`;
+                    refText.value = '';
+                    refAudio.readOnly = true;
+                    if (playBtn) playBtn.style.display = 'inline-block';
+                    if (deleteBtn) deleteBtn.style.display = 'inline-block';
+                }
+            } else if (val.startsWith('design:')) {
+                const voiceId = val.substring(7);
+                const voice = (window._designedVoicesCache || []).find(v => v.id === voiceId);
+                if (voice) {
+                    refAudio.value = `designed_voices/${voice.filename}`;
+                    refText.value = voice.sample_text;
+                    refAudio.readOnly = true;
+                    if (playBtn) playBtn.style.display = 'inline-block';
+                    if (deleteBtn) deleteBtn.style.display = 'none';
+                }
+            } else {
+                // Legacy: plain voice ID (backward compat with old designed voice values)
+                const voice = (window._designedVoicesCache || []).find(v => v.id === val);
+                if (voice) {
+                    refAudio.value = `designed_voices/${voice.filename}`;
+                    refText.value = voice.sample_text;
+                    refAudio.readOnly = true;
+                    if (playBtn) playBtn.style.display = 'inline-block';
+                    if (deleteBtn) deleteBtn.style.display = 'none';
+                }
             }
             debouncedSaveVoices();
+        };
+
+        // --- Clone Voice Upload Handlers ---
+
+        window.uploadCloneVoice = (btn) => {
+            const card = btn.closest('.card-body');
+            card.querySelector('.clone-voice-file-input').click();
+        };
+
+        window.handleCloneVoiceUpload = async (input) => {
+            const file = input.files[0];
+            if (!file) return;
+            input.value = '';
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const res = await fetch('/api/clone_voices/upload', { method: 'POST', body: formData });
+                if (!res.ok) { const err = await res.json(); showToast(err.detail || 'Upload failed', 'error'); return; }
+                const result = await res.json();
+
+                // Refresh cache and rebuild voice cards
+                window._cloneVoicesCache = await API.get('/api/clone_voices/list');
+                await loadVoices();
+
+                showToast(`Uploaded "${file.name}"`, 'success');
+            } catch (e) {
+                showToast('Upload failed: ' + e.message, 'error');
+            }
+        };
+
+        window.playCloneVoice = (btn) => {
+            const card = btn.closest('.card-body');
+            const refAudio = card.querySelector('.ref-audio').value;
+            if (refAudio) {
+                const audio = new Audio(`/${refAudio}?t=${Date.now()}`);
+                audio.play();
+            }
+        };
+
+        window.deleteCloneVoice = async (btn) => {
+            if (!await showConfirm('Delete this uploaded clone voice?')) return;
+            const card = btn.closest('.card-body');
+            const select = card.querySelector('.designed-voice-select');
+            const val = select.value;
+            if (!val.startsWith('clone:')) return;
+            const voiceId = val.substring(6);
+
+            try {
+                const res = await fetch(`/api/clone_voices/${encodeURIComponent(voiceId)}`, { method: 'DELETE' });
+                if (!res.ok) { const err = await res.json(); showToast(err.detail || 'Failed to delete', 'error'); return; }
+
+                window._cloneVoicesCache = await API.get('/api/clone_voices/list');
+                await loadVoices();
+                showToast('Clone voice deleted', 'success');
+            } catch (e) {
+                showToast('Error: ' + e.message, 'error');
+            }
         };
 
         // --- LoRA Training ---

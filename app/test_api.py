@@ -528,6 +528,65 @@ def test_voice_design_save_and_delete():
     assert_status(r, 200)
 
 
+# ── Section 9b: Clone Voices ────────────────────────────────
+
+def test_clone_voices_list():
+    r = get("/api/clone_voices/list")
+    assert_status(r, 200)
+    data = r.json()
+    if not isinstance(data, list):
+        raise TestFailure(f"Expected list, got {type(data).__name__}")
+
+
+def test_clone_voices_upload_bad_format():
+    files = {"file": ("test.txt", b"not audio", "text/plain")}
+    r = requests.post(f"{BASE_URL}/api/clone_voices/upload", files=files)
+    assert_status(r, 400)
+
+
+def test_clone_voices_delete_404():
+    r = delete(f"/api/clone_voices/{TEST_PREFIX}fake_id")
+    assert_status(r, 404)
+
+
+def test_clone_voices_upload_and_delete():
+    # Create a minimal WAV file (44-byte header + silence)
+    import struct
+    sample_rate = 16000
+    num_samples = 16000  # 1 second
+    data_size = num_samples * 2
+    wav_header = struct.pack('<4sI4s4sIHHIIHH4sI',
+        b'RIFF', 36 + data_size, b'WAVE',
+        b'fmt ', 16, 1, 1, sample_rate, sample_rate * 2, 2, 16,
+        b'data', data_size)
+    wav_bytes = wav_header + b'\x00' * data_size
+
+    files = {"file": (f"{TEST_PREFIX}clone_test.wav", wav_bytes, "audio/wav")}
+    r = requests.post(f"{BASE_URL}/api/clone_voices/upload", files=files)
+    assert_status(r, 200)
+    data = r.json()
+    assert_key(data, "voice_id")
+    assert_key(data, "filename")
+    voice_id = data["voice_id"]
+
+    # Verify it appears in list
+    r = get("/api/clone_voices/list")
+    assert_status(r, 200)
+    found = any(v["id"] == voice_id for v in r.json())
+    if not found:
+        raise TestFailure(f"Uploaded voice {voice_id} not found in list")
+
+    # Delete it
+    r = delete(f"/api/clone_voices/{voice_id}")
+    assert_status(r, 200)
+
+    # Verify it's gone
+    r = get("/api/clone_voices/list")
+    found = any(v["id"] == voice_id for v in r.json())
+    if found:
+        raise TestFailure(f"Deleted voice {voice_id} still in list")
+
+
 # ── Section 10: LoRA Datasets ───────────────────────────────
 
 def test_lora_list_datasets():
@@ -898,6 +957,12 @@ def run_all_tests():
     run_test("voice_design_delete_404", test_voice_design_delete_404)
     run_test("voice_design_preview", test_voice_design_preview, requires_full=True)
     run_test("voice_design_save_and_delete", test_voice_design_save_and_delete, requires_full=True)
+
+    section("Clone Voices")
+    run_test("clone_voices_list", test_clone_voices_list)
+    run_test("clone_voices_upload_bad_format", test_clone_voices_upload_bad_format)
+    run_test("clone_voices_delete_404", test_clone_voices_delete_404)
+    run_test("clone_voices_upload_and_delete", test_clone_voices_upload_and_delete)
 
     section("LoRA Datasets")
     run_test("lora_list_datasets", test_lora_list_datasets)

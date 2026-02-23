@@ -50,6 +50,9 @@ app/uploads/
 # Designed voices (user-generated)
 designed_voices/
 
+# Clone voices (user-uploaded reference audio)
+clone_voices/
+
 # LoRA training (user-generated)
 lora_models/
 lora_datasets/
