@@ -668,6 +668,11 @@ async def get_audacity_export():
 
 class M4bExportRequest(BaseModel):
     per_chunk_chapters: bool = False
+    title: str = ""
+    author: str = ""
+    narrator: str = ""
+    year: str = ""
+    description: str = ""
 
 @app.post("/api/merge_m4b")
 async def merge_m4b_endpoint(request: M4bExportRequest, background_tasks: BackgroundTasks):
@@ -678,7 +683,15 @@ async def merge_m4b_endpoint(request: M4bExportRequest, background_tasks: Backgr
         process_state["m4b_export"]["running"] = True
         process_state["m4b_export"]["logs"] = ["Starting M4B export..."]
         try:
-            success, msg = project_manager.merge_m4b(per_chunk_chapters=request.per_chunk_chapters)
+            meta = {
+                "title": request.title,
+                "author": request.author,
+                "narrator": request.narrator,
+                "year": request.year,
+                "description": request.description,
+                "cover_path": os.path.join(ROOT_DIR, "m4b_cover.jpg") if os.path.exists(os.path.join(ROOT_DIR, "m4b_cover.jpg")) else "",
+            }
+            success, msg = project_manager.merge_m4b(per_chunk_chapters=request.per_chunk_chapters, metadata=meta)
             if success:
                 process_state["m4b_export"]["logs"].append(f"Export complete: {msg}")
             else:
@@ -696,6 +709,25 @@ async def get_audiobook_m4b():
     if not os.path.exists(M4B_PATH):
         raise HTTPException(status_code=404, detail="M4B audiobook not found. Export it first.")
     return FileResponse(M4B_PATH, filename="audiobook.m4b", media_type="audio/mp4")
+
+@app.post("/api/m4b_cover")
+async def upload_m4b_cover(file: UploadFile = File(...)):
+    """Upload a cover image for M4B export."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    cover_path = os.path.join(ROOT_DIR, "m4b_cover.jpg")
+    content = await file.read()
+    with open(cover_path, "wb") as f:
+        f.write(content)
+    return {"status": "uploaded", "path": cover_path}
+
+@app.delete("/api/m4b_cover")
+async def delete_m4b_cover():
+    """Remove the uploaded cover image."""
+    cover_path = os.path.join(ROOT_DIR, "m4b_cover.jpg")
+    if os.path.exists(cover_path):
+        os.remove(cover_path)
+    return {"status": "removed"}
 
 @app.post("/api/generate_batch")
 async def generate_batch_endpoint(request: BatchGenerateRequest, background_tasks: BackgroundTasks):

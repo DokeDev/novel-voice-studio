@@ -500,16 +500,19 @@ class ProjectManager:
 
         return True, zip_path
 
-    def merge_m4b(self, per_chunk_chapters=False):
+    def merge_m4b(self, per_chunk_chapters=False, metadata=None):
         """Merge audio chunks into an M4B audiobook with chapter markers.
 
         Args:
             per_chunk_chapters: If True, each chunk is a chapter. If False,
                 detect chapter headings and group chunks into sections.
+            metadata: Optional dict with keys: title, author, narrator, year,
+                description, cover_path (absolute path to cover image).
 
         Returns:
             tuple: (success: bool, message: str)
         """
+        metadata = metadata or {}
         chunks = self.load_chunks()
 
         # Phase 1 — Compute timeline (same logic as export_audacity)
@@ -560,10 +563,14 @@ class ProjectManager:
         try:
             final_audio.export(temp_wav, format="wav")
 
-            # Phase 4 — Write FFmpeg metadata file
+            # Phase 4 — Write FFmpeg metadata file with book metadata
             meta_lines = [";FFMETADATA1"]
+            meta_lines.append(f"title={self._escape_ffmeta(metadata.get('title') or 'Audiobook')}")
+            meta_lines.append(f"artist={self._escape_ffmeta(metadata.get('author') or '')}")
+            meta_lines.append(f"album_artist={self._escape_ffmeta(metadata.get('narrator') or '')}")
+            meta_lines.append(f"date={self._escape_ffmeta(metadata.get('year') or '')}")
+            meta_lines.append(f"comment={self._escape_ffmeta(metadata.get('description') or '')}")
             meta_lines.append("genre=Audiobook")
-            meta_lines.append("title=Audiobook")
             meta_lines.append("")
             for title, start_ms, end_ms in chapters:
                 safe_title = self._escape_ffmeta(title)
@@ -578,11 +585,19 @@ class ProjectManager:
                 f.write("\n".join(meta_lines))
 
             # Phase 5 — FFmpeg: WAV + chapters → M4B (AAC)
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", temp_wav,
-                "-i", meta_path,
-                "-map_metadata", "1",
+            cover_path = metadata.get("cover_path") or ""
+            has_cover = cover_path and os.path.exists(cover_path)
+
+            cmd = ["ffmpeg", "-y", "-i", temp_wav]
+            if has_cover:
+                cmd += ["-i", cover_path]
+            cmd += ["-i", meta_path, "-map_metadata", "2" if has_cover else "1"]
+            # Map audio stream
+            cmd += ["-map", "0:a"]
+            if has_cover:
+                # Map cover as attached picture
+                cmd += ["-map", "1:v", "-c:v", "copy", "-disposition:v:0", "attached_pic"]
+            cmd += [
                 "-c:a", "aac",
                 "-b:a", "128k",
                 "-movflags", "+faststart",
