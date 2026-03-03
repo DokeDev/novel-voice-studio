@@ -764,6 +764,14 @@
                             <i class="fas fa-headphones me-2"></i>Export to Audacity
                         </button>
                         <span id="audacity-status" class="ms-2 mt-3 d-inline-block"></span>
+                        <button class="btn btn-outline-success mt-3 ms-2" onclick="exportM4B()">
+                            <i class="fas fa-book-reader me-2"></i>Export M4B
+                        </button>
+                        <label class="form-check form-check-inline ms-2 mt-3 d-inline-flex align-items-center" title="Creates a chapter for every chunk instead of grouping by detected headings">
+                            <input type="checkbox" class="form-check-input me-1" id="m4b-per-chunk">
+                            <small class="text-muted">Per-chunk chapters</small>
+                        </label>
+                        <span id="m4b-status" class="ms-2 mt-3 d-inline-block"></span>
                     </div>
                 </div>
             </div>
@@ -2079,6 +2087,43 @@
                                 const a = document.createElement('a');
                                 a.href = `/api/export_audacity?t=${Date.now()}`;
                                 a.download = 'audacity_export.zip';
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                setTimeout(() => { statusEl.innerHTML = ''; }, 5000);
+                            } else {
+                                const lastLog = status.logs[status.logs.length - 1] || 'Unknown error';
+                                statusEl.innerHTML = `<span class="text-danger"><i class="fas fa-times me-1"></i>${lastLog}</span>`;
+                            }
+                        }
+                    } catch (e) {
+                        clearInterval(poll);
+                        statusEl.innerHTML = `<span class="text-danger">Poll error: ${e.message}</span>`;
+                    }
+                }, 1000);
+            } catch (e) {
+                statusEl.innerHTML = `<span class="text-danger"><i class="fas fa-times me-1"></i>${e.message}</span>`;
+            }
+        };
+
+        window.exportM4B = async () => {
+            const statusEl = document.getElementById('m4b-status');
+            const perChunk = document.getElementById('m4b-per-chunk').checked;
+            statusEl.innerHTML = '<span class="text-info"><i class="fas fa-spinner fa-spin me-1"></i>Exporting M4B...</span>';
+
+            try {
+                await API.post('/api/merge_m4b', { per_chunk_chapters: perChunk });
+
+                const poll = setInterval(async () => {
+                    try {
+                        const status = await API.get('/api/status/m4b_export');
+                        if (!status.running) {
+                            clearInterval(poll);
+                            if (status.logs.some(l => l.includes("complete"))) {
+                                statusEl.innerHTML = '<span class="text-success"><i class="fas fa-check me-1"></i>Done!</span>';
+                                const a = document.createElement('a');
+                                a.href = `/api/audiobook_m4b?t=${Date.now()}`;
+                                a.download = 'audiobook.m4b';
                                 document.body.appendChild(a);
                                 a.click();
                                 document.body.removeChild(a);
