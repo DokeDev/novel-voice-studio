@@ -333,11 +333,20 @@ class TTSEngine:
         Checks if the model snapshot exists in the HF cache and loads from
         the local directory path directly, bypassing all HF Hub network calls.
         Falls back to normal download on first install when cache is empty.
+        If loading from local cache fails (e.g. incomplete snapshot), retries
+        with the model ID so HF Hub can download any missing files.
         """
         local_path = TTSEngine._resolve_local_model_path(model_id)
         if local_path:
             print(f"  Loading from local cache: {local_path}")
-            return model_cls.from_pretrained(local_path, **load_kwargs)
+            try:
+                return model_cls.from_pretrained(local_path, **load_kwargs)
+            except Exception as e:
+                import traceback
+                print(f"  Warning: Failed to load from local cache: {e}")
+                traceback.print_exc()
+                print(f"  Retrying with model ID (may download missing files)...")
+                return model_cls.from_pretrained(model_id, **load_kwargs)
         else:
             print(f"  Model not cached locally, downloading {model_id}...")
             return model_cls.from_pretrained(model_id, **load_kwargs)
@@ -765,7 +774,9 @@ class TTSEngine:
             return True
 
         except Exception as e:
+            import traceback
             print(f"Error generating LoRA voice: {e}")
+            traceback.print_exc()
             return False
 
     # ── Batch generation ─────────────────────────────────────────
@@ -952,7 +963,9 @@ class TTSEngine:
             return True
 
         except Exception as e:
+            import traceback
             print(f"Error generating custom voice for '{speaker}': {e}")
+            traceback.print_exc()
             return False
 
     def _local_generate_clone(self, text, speaker, voice_config, output_path):
@@ -998,7 +1011,9 @@ class TTSEngine:
             return True
 
         except Exception as e:
+            import traceback
             print(f"Error generating clone voice for '{speaker}': {e}")
+            traceback.print_exc()
             return False
 
     def _local_batch_custom(self, chunks, voice_config, output_dir, batch_seed=-1):
@@ -1467,7 +1482,9 @@ class TTSEngine:
             return True
 
         except Exception as e:
+            import traceback
             print(f"Error generating custom voice for '{speaker}': {e}")
+            traceback.print_exc()
             return False
 
     def _external_generate_clone(self, text, speaker, voice_config, output_path):
@@ -1525,7 +1542,9 @@ class TTSEngine:
             return True
 
         except Exception as e:
+            import traceback
             print(f"Error generating clone voice for '{speaker}': {e}")
+            traceback.print_exc()
             return False
 
     def _sequential_custom(self, chunks, voice_config, output_dir, batch_seed=-1):
