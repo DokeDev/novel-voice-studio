@@ -190,11 +190,6 @@
                                 <input type="number" class="form-control" id="sub-batch-ratio" value="5" min="1" step="0.5">
                                 <div class="form-text">Max long/short ratio before split</div>
                             </div>
-                            <div class="col-md-2" id="sub-batch-max-chars-group">
-                                <label class="form-label">Max Chars/Batch</label>
-                                <input type="number" class="form-control" id="sub-batch-max-chars" value="3000" min="500" step="500">
-                                <div class="form-text">VRAM safety limit per sub-batch. Reduce if you encounter HIP OOM errors or crashes (especially with long reference audio)</div>
-                            </div>
                             <div class="col-md-2" id="sub-batch-max-items-group">
                                 <label class="form-label">Max Items/Batch</label>
                                 <input type="number" class="form-control" id="sub-batch-max-items" value="0" min="0" step="1">
@@ -995,9 +990,6 @@
                 if (config.tts.sub_batch_ratio != null) {
                     document.getElementById('sub-batch-ratio').value = config.tts.sub_batch_ratio;
                 }
-                if (config.tts.sub_batch_max_chars != null) {
-                    document.getElementById('sub-batch-max-chars').value = config.tts.sub_batch_max_chars;
-                }
                 if (config.tts.sub_batch_max_items != null) {
                     document.getElementById('sub-batch-max-items').value = config.tts.sub_batch_max_items;
                 }
@@ -1136,7 +1128,6 @@
                     sub_batch_enabled: document.getElementById('sub-batch-enabled').checked,
                     sub_batch_min_size: parseInt(document.getElementById('sub-batch-min-size').value) || 4,
                     sub_batch_ratio: parseFloat(document.getElementById('sub-batch-ratio').value) || 5,
-                    sub_batch_max_chars: parseInt(document.getElementById('sub-batch-max-chars').value) || 3000,
                     sub_batch_max_items: parseInt(document.getElementById('sub-batch-max-items').value) || 0
                 },
                 prompts: {

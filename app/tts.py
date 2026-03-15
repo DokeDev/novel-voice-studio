@@ -62,7 +62,6 @@ class TTSEngine:
         self._sub_batch_enabled = tts_config.get("sub_batch_enabled", True)
         self._sub_batch_min_size = max(1, tts_config.get("sub_batch_min_size", 4))
         self._sub_batch_ratio = max(1.0, float(tts_config.get("sub_batch_ratio", 5)))
-        self._sub_batch_max_chars = max(500, int(tts_config.get("sub_batch_max_chars", 3000)))
         self._sub_batch_max_items = int(tts_config.get("sub_batch_max_items", 0))  # 0 = auto
 
         # Lazy-loaded backends (guarded by _model_lock to prevent concurrent loads)
@@ -175,11 +174,10 @@ class TTSEngine:
     def _build_sub_batches(self, texts, max_items=None):
         """Split sorted-by-length texts into sub-batches.
 
-        Splits on four criteria (checked in order):
+        Splits on three criteria (checked in order):
         1. VRAM item limit: when max_items is set (from _estimate_max_batch_size)
-        2. Total chars: when cumulative chars exceed sub_batch_max_chars
-        3. Length ratio: when longest/shortest > sub_batch_ratio
-        4. Minimum size: ratio splits only happen after sub_batch_min_size items
+        2. Length ratio: when longest/shortest > sub_batch_ratio
+        3. Minimum size: ratio splits only happen after sub_batch_min_size items
 
         Returns list of (start, end) index tuples.
         """
@@ -192,20 +190,14 @@ class TTSEngine:
 
         sub_batches = []
         batch_start = 0
-        batch_chars = len(texts[0])
 
         for i in range(1, len(texts)):
             shortest = max(len(texts[batch_start]), 1)
-            batch_chars += len(texts[i])
             should_split = False
 
             # VRAM-estimated item limit (highest priority — based on actual
             # free GPU memory and per-sequence KV cache cost)
             if max_items is not None and (i - batch_start) >= max_items:
-                should_split = True
-            # Chars split: too much total text risks OOM — always split
-            # regardless of min_size (memory safety takes priority)
-            elif batch_chars > self._sub_batch_max_chars and (i - batch_start) >= 1:
                 should_split = True
             # Ratio split: large length disparity wastes padding —
             # only split after min_size items to preserve parallelism
@@ -216,7 +208,6 @@ class TTSEngine:
             if should_split:
                 sub_batches.append((batch_start, i))
                 batch_start = i
-                batch_chars = len(texts[i])
 
         sub_batches.append((batch_start, len(texts)))
         return sub_batches
