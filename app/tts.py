@@ -109,8 +109,15 @@ class TTSEngine:
         progressive throughput degradation.  Resetting clears all in-memory
         guards; the next call pays a one-time recompilation cost (fast due
         to inductor disk cache) but prevents the slowdown from compounding.
+
+        Only applied on ROCm (AMD GPUs). On NVIDIA, max-autotune mode
+        re-benchmarks all kernel variants after each reset, and the
+        benchmarking cost scales with tensor size — causing worse slowdown
+        than the guard accumulation it prevents.
         """
         import torch
+        if not (hasattr(torch.version, "hip") and torch.version.hip):
+            return  # skip on NVIDIA/CPU — recompilation cost outweighs benefit
         torch._dynamo.reset()
 
     def _estimate_max_batch_size(self, model, clone_prompt_tokens=0,
