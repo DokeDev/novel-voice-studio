@@ -230,13 +230,13 @@
                                 </div>
                                 <div class="col">
                                     <label class="form-label">Top K</label>
-                                    <input type="number" class="form-control" id="top-k" value="20" min="0" max="200" step="1">
-                                    <div class="form-text">Top-K token filtering</div>
+                                    <input type="number" class="form-control" id="top-k" value="0" min="0" max="200" step="1">
+                                    <div class="form-text">Top-K token filtering (0 = disabled)</div>
                                 </div>
                                 <div class="col">
                                     <label class="form-label">Min P</label>
                                     <input type="number" class="form-control" id="min-p" value="0" min="0" max="1" step="0.01">
-                                    <div class="form-text">Minimum probability cutoff</div>
+                                    <div class="form-text">Minimum probability cutoff (0 = disabled)</div>
                                 </div>
                                 <div class="col">
                                     <label class="form-label">Presence Penalty</label>
@@ -1085,7 +1085,7 @@
             document.getElementById('max-tokens').value = 4096;
             document.getElementById('temperature').value = 0.6;
             document.getElementById('top-p').value = 0.8;
-            document.getElementById('top-k').value = 20;
+            document.getElementById('top-k').value = 0;
             document.getElementById('min-p').value = 0;
             document.getElementById('presence-penalty').value = 0;
             document.getElementById('banned-tokens').value = '';

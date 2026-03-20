@@ -73,6 +73,25 @@ lora_datasets/{name}/
 {"audio_filepath": "sample_001.wav", "text": "I just don't know what to do anymore."}
 ```
 
+## Multilingual
+
+LoRA adapters trained on single-language data carry that language's accent and pronunciation. An adapter trained on English samples will render German text with English pronunciation — the base model occasionally provides enough guidance for acceptable results, but it's inconsistent.
+
+**Train a separate LoRA per language for each speaker.** This produces clean pronunciation without fighting the adapter's learned phonology.
+
+### New Language vs. Voice Identity
+
+The loss targets in this guide (4.1-4.2) were established for **English voice identity** training, where the base model already knows the language and the adapter only learns a new voice. When training on a **language the base model doesn't natively support**, the adapter must learn both new phonology and voice identity simultaneously. This is a harder task that shifts the overfitting boundary upward:
+
+| Training Goal | Target Loss | Garble Floor |
+|--------------|-------------|--------------|
+| Voice identity (supported language) | 4.1-4.2 | ~4.1 |
+| New language + voice identity | 4.5-5.5 | ~4.1-4.5 (still garbles at similar absolute loss) |
+
+For new languages, use much lower learning rates and expect higher final loss. A loss of 5.0-5.5 can produce clean, natural speech with good pronunciation — the adapter has learned the language but hasn't been pushed into overfitting. Instruct following will be weaker at these higher losses, but voice identity and pronunciation are the priority.
+
+**Tested example:** Catalan female, 2321 samples, 1 epoch, lr=2e-7, r=64, alpha=128 — final loss 5.38, clean speech with proper Catalan pronunciation. Earlier attempts at lr=1e-5 (loss 3.78) produced garbled output despite being in the "normal" English voice identity range.
+
 ## Troubleshooting
 
 | Problem | Cause | Fix |
@@ -103,3 +122,5 @@ lora_datasets/{name}/
 | male-lora-05 | 61 | 9 | 1e-6 | 128 | 4.17 | Clean, expressive, safe margin |
 | male-lora-06 | 61 | 12 | 1e-6 | 128 | 3.99 | Very expressive but 50% garbled |
 | male-lora-07 | 61 | 14 | 1e-6 | 128 | 3.89 | Legible but overfit |
+| catalan-f-01 | 2321 | 1 | 1e-5 | 128 | 3.78 | Garbled — lr too high for new language |
+| **catalan-f-07** | **2321** | **1** | **2e-7** | **128** | **5.38** | **Clean Catalan, good pronunciation** |
