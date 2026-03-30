@@ -170,6 +170,67 @@ def test_save_config_roundtrip():
     post("/api/config", json=restore)
 
 
+def test_save_pause_config_roundtrip():
+    # Read original
+    r = get("/api/config")
+    assert_status(r, 200)
+    original = r.json()
+
+    # Save with custom pause values
+    test_config = {
+        "llm": original["llm"],
+        "tts": {
+            **original.get("tts", {}),
+            "pause_between_speakers_ms": 1000,
+            "pause_same_speaker_ms": 400,
+        },
+        "prompts": original.get("prompts"),
+        "generation": original.get("generation"),
+    }
+    test_config["tts"].setdefault("mode", "external")
+    test_config["tts"].setdefault("url", "http://127.0.0.1:7860")
+    test_config["tts"].setdefault("device", "auto")
+
+    r = post("/api/config", json=test_config)
+    assert_status(r, 200)
+
+    # Read back and verify
+    r = get("/api/config")
+    assert_status(r, 200)
+    readback = r.json()
+    tts = readback.get("tts", {})
+    if tts.get("pause_between_speakers_ms") != 1000:
+        raise TestFailure(f"pause_between_speakers_ms not persisted: {tts.get('pause_between_speakers_ms')}")
+    if tts.get("pause_same_speaker_ms") != 400:
+        raise TestFailure(f"pause_same_speaker_ms not persisted: {tts.get('pause_same_speaker_ms')}")
+
+    # Restore original
+    restore = {
+        "llm": original["llm"],
+        "tts": original.get("tts", {"mode": "external", "url": "http://127.0.0.1:7860", "device": "auto"}),
+        "prompts": original.get("prompts"),
+        "generation": original.get("generation"),
+    }
+    post("/api/config", json=restore)
+
+
+def test_pause_config_defaults():
+    """Verify pause fields have sensible defaults when not explicitly set."""
+    r = get("/api/config")
+    assert_status(r, 200)
+    tts = r.json().get("tts", {})
+    pause_between = tts.get("pause_between_speakers_ms")
+    pause_same = tts.get("pause_same_speaker_ms")
+    if pause_between is None:
+        raise TestFailure("pause_between_speakers_ms missing from config response")
+    if pause_same is None:
+        raise TestFailure("pause_same_speaker_ms missing from config response")
+    if not isinstance(pause_between, int) or pause_between < 0:
+        raise TestFailure(f"Invalid pause_between_speakers_ms: {pause_between}")
+    if not isinstance(pause_same, int) or pause_same < 0:
+        raise TestFailure(f"Invalid pause_same_speaker_ms: {pause_same}")
+
+
 def test_save_review_prompts_roundtrip():
     # Read current config
     r = get("/api/config")
@@ -361,6 +422,82 @@ def test_update_chunk():
     # Restore original
     orig = shared.get("chunk0_original", {})
     post("/api/chunks/0", json=orig)
+
+
+def test_update_chunk_pause_after():
+    """Setting pause_after on a chunk persists and does not reset status."""
+    if not shared.get("has_chunks"):
+        raise TestFailure("SKIP: no chunks available")
+
+    # Read current chunk 0 status
+    r = get("/api/chunks")
+    assert_status(r, 200)
+    original_status = r.json()[0].get("status")
+
+    # Set pause_after
+    r = post("/api/chunks/0", json={"pause_after": 3000})
+    assert_status(r, 200)
+    data = r.json()
+    if data.get("pause_after") != 3000:
+        raise TestFailure(f"pause_after not set: {data.get('pause_after')}")
+
+    # Verify status was NOT reset (pause_after is merge-time only)
+    if data.get("status") != original_status:
+        raise TestFailure(
+            f"Status changed from '{original_status}' to '{data.get('status')}' "
+            f"— pause_after should not reset status"
+        )
+
+    # Read back via GET to confirm persistence
+    r = get("/api/chunks")
+    assert_status(r, 200)
+    chunk0 = r.json()[0]
+    if chunk0.get("pause_after") != 3000:
+        raise TestFailure(f"pause_after not persisted on read-back: {chunk0.get('pause_after')}")
+
+    # Clear pause_after by sending null
+    r = post("/api/chunks/0", json={"pause_after": None})
+    assert_status(r, 200)
+    data = r.json()
+    if data.get("pause_after") is not None:
+        raise TestFailure(f"pause_after not cleared: {data.get('pause_after')}")
+
+    # Verify key is removed from JSON (not just set to null)
+    r = get("/api/chunks")
+    assert_status(r, 200)
+    chunk0 = r.json()[0]
+    if "pause_after" in chunk0:
+        raise TestFailure(f"pause_after key should be removed after clearing, got: {chunk0.get('pause_after')}")
+
+
+def test_update_chunk_pause_after_zero():
+    """pause_after=0 is a valid override (no silence)."""
+    if not shared.get("has_chunks"):
+        raise TestFailure("SKIP: no chunks available")
+
+    r = post("/api/chunks/0", json={"pause_after": 0})
+    assert_status(r, 200)
+    data = r.json()
+    if data.get("pause_after") != 0:
+        raise TestFailure(f"pause_after=0 not set correctly: {data.get('pause_after')}")
+
+    # Clean up
+    post("/api/chunks/0", json={"pause_after": None})
+
+
+def test_update_chunk_pause_after_negative():
+    """Negative pause_after should be clamped to 0."""
+    if not shared.get("has_chunks"):
+        raise TestFailure("SKIP: no chunks available")
+
+    r = post("/api/chunks/0", json={"pause_after": -500})
+    assert_status(r, 200)
+    data = r.json()
+    if data.get("pause_after") != 0:
+        raise TestFailure(f"Negative pause_after should clamp to 0, got: {data.get('pause_after')}")
+
+    # Clean up
+    post("/api/chunks/0", json={"pause_after": None})
 
 
 def test_update_chunk_404():
@@ -918,6 +1055,8 @@ def run_all_tests():
     section("Config")
     run_test("get_config", test_get_config)
     run_test("save_config_roundtrip", test_save_config_roundtrip)
+    run_test("save_pause_config_roundtrip", test_save_pause_config_roundtrip)
+    run_test("pause_config_defaults", test_pause_config_defaults)
     run_test("save_review_prompts_roundtrip", test_save_review_prompts_roundtrip)
     run_test("get_default_prompts", test_get_default_prompts)
 
@@ -941,6 +1080,9 @@ def run_all_tests():
     section("Chunks")
     run_test("get_chunks", test_get_chunks)
     run_test("update_chunk", test_update_chunk)
+    run_test("update_chunk_pause_after", test_update_chunk_pause_after)
+    run_test("update_chunk_pause_after_zero", test_update_chunk_pause_after_zero)
+    run_test("update_chunk_pause_after_negative", test_update_chunk_pause_after_negative)
     run_test("update_chunk_404", test_update_chunk_404)
     run_test("insert_chunk", test_insert_chunk)
     run_test("insert_chunk_404", test_insert_chunk_404)

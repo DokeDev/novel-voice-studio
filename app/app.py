@@ -127,6 +127,8 @@ class TTSConfig(BaseModel):
     sub_batch_ratio: float = 5.0  # max longest/shortest length ratio before splitting
     sub_batch_max_items: int = 0  # hard cap on sequences per sub-batch (0 = auto from VRAM estimate)
     batch_group_by_type: bool = False  # group chunks by voice type for efficient batching
+    pause_between_speakers_ms: int = 500  # silence (ms) between different speakers during merge
+    pause_same_speaker_ms: int = 250  # silence (ms) when same speaker continues during merge
 
 class GenerationConfig(BaseModel):
     chunk_size: int = 3000
@@ -167,6 +169,7 @@ class ChunkUpdate(BaseModel):
     text: Optional[str] = None
     instruct: Optional[str] = None
     speaker: Optional[str] = None
+    pause_after: Optional[int] = None
 
 class BatchGenerateRequest(BaseModel):
     indices: List[int]

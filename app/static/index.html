@@ -196,6 +196,18 @@
                                 <div class="form-text">Hard cap on sequences per sub-batch (0 = auto from VRAM estimate)</div>
                             </div>
                         </div>
+                        <div class="row mb-3">
+                            <div class="col-md-2">
+                                <label class="form-label">Speaker Change Pause (ms)</label>
+                                <input type="number" class="form-control" id="pause-between-speakers" value="500" min="0" step="50">
+                                <div class="form-text">Silence between different speakers on merge</div>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Same Speaker Pause (ms)</label>
+                                <input type="number" class="form-control" id="pause-same-speaker" value="250" min="0" step="50">
+                                <div class="form-text">Silence when same speaker continues on merge</div>
+                            </div>
+                        </div>
 
                         <h5 class="mb-3 mt-4">
                             <a class="text-decoration-none" data-bs-toggle="collapse" href="#promptSettings" role="button" aria-expanded="false">
@@ -993,6 +1005,12 @@
                 if (config.tts.sub_batch_max_items != null) {
                     document.getElementById('sub-batch-max-items').value = config.tts.sub_batch_max_items;
                 }
+                if (config.tts.pause_between_speakers_ms != null) {
+                    document.getElementById('pause-between-speakers').value = config.tts.pause_between_speakers_ms;
+                }
+                if (config.tts.pause_same_speaker_ms != null) {
+                    document.getElementById('pause-same-speaker').value = config.tts.pause_same_speaker_ms;
+                }
                 toggleTTSMode();
 
                 // Load custom prompts if they exist and are non-empty
@@ -1128,7 +1146,9 @@
                     sub_batch_enabled: document.getElementById('sub-batch-enabled').checked,
                     sub_batch_min_size: parseInt(document.getElementById('sub-batch-min-size').value) || 4,
                     sub_batch_ratio: parseFloat(document.getElementById('sub-batch-ratio').value) || 5,
-                    sub_batch_max_items: parseInt(document.getElementById('sub-batch-max-items').value) || 0
+                    sub_batch_max_items: parseInt(document.getElementById('sub-batch-max-items').value) || 0,
+                    pause_between_speakers_ms: parseInt(document.getElementById('pause-between-speakers').value) || 500,
+                    pause_same_speaker_ms: parseInt(document.getElementById('pause-same-speaker').value) || 250
                 },
                 prompts: {
                     system_prompt: document.getElementById('system-prompt').value,
@@ -1615,7 +1635,13 @@
                                 </td>
                                 <td><input type="text" class="form-control form-control-sm" value="${chunk.speaker}" onchange="updateChunk(${chunk.id}, 'speaker', this.value)"></td>
                                 <td><textarea class="form-control form-control-sm chunk-text" rows="2" onchange="updateChunk(${chunk.id}, 'text', this.value)">${chunk.text}</textarea></td>
-                                <td><textarea class="form-control form-control-sm chunk-instruct" rows="2" onchange="updateChunk(${chunk.id}, 'instruct', this.value)" title="Short TTS direction (3-8 words)">${chunk.instruct || ''}</textarea></td>
+                                <td>
+                                    <textarea class="form-control form-control-sm chunk-instruct" rows="2" onchange="updateChunk(${chunk.id}, 'instruct', this.value)" title="Short TTS direction (3-8 words)">${chunk.instruct || ''}</textarea>
+                                    <div class="chunk-pause-row d-none mt-1 align-items-center gap-1">
+                                        <small class="text-muted text-nowrap">Pause after (ms):</small>
+                                        <input type="number" class="form-control form-control-sm chunk-pause-after" style="width:80px;" value="${chunk.pause_after ?? ''}" placeholder="default" min="0" step="50" onchange="updateChunk(${chunk.id}, 'pause_after', this.value === '' ? null : parseInt(this.value))">
+                                    </div>
+                                </td>
                                 <td><span class="badge bg-${statusColor}">${chunk.status}</span></td>
                                 <td>
                                     <div class="d-flex align-items-center gap-2">
@@ -1655,6 +1681,17 @@
                     // Collapse back to 2 rows
                     ta.style.height = '';
                     ta.style.overflow = '';
+                }
+            });
+
+            // Show/hide pause_after control
+            row.querySelectorAll('.chunk-pause-row').forEach(el => {
+                if (expanding) {
+                    el.classList.remove('d-none');
+                    el.classList.add('d-flex');
+                } else {
+                    el.classList.remove('d-flex');
+                    el.classList.add('d-none');
                 }
             });
         };
@@ -1859,6 +1896,11 @@
                     }
                 }
             });
+
+            // Coerce pause_after: empty string means clear the override
+            if ('pause_after' in data) {
+                data.pause_after = data.pause_after === '' ? null : parseInt(data.pause_after);
+            }
 
             // Save all fields at once
             if (Object.keys(data).length > 0) {

@@ -17,25 +17,72 @@ def sanitize_filename(name):
     return name.lower()
 
 
-def combine_audio_with_pauses(audio_segments, speakers, pause_ms=DEFAULT_PAUSE_MS, same_speaker_pause_ms=SAME_SPEAKER_PAUSE_MS):
-    """Combine audio segments with pauses between them"""
+def combine_audio_with_pauses(audio_segments, speakers, pause_ms=DEFAULT_PAUSE_MS,
+                              same_speaker_pause_ms=SAME_SPEAKER_PAUSE_MS,
+                              pause_overrides=None):
+    """Combine audio segments with pauses between them.
+
+    Args:
+        pause_overrides: Optional list aligned with audio_segments. Each entry is
+            the pause (ms) to insert *after* that segment, or None to use the
+            default speaker-change logic. The last entry is ignored.
+    """
     if not audio_segments:
         return None
-
-    silence_between_speakers = AudioSegment.silent(duration=pause_ms)
-    silence_same_speaker = AudioSegment.silent(duration=same_speaker_pause_ms)
 
     combined = audio_segments[0]
     prev_speaker = speakers[0]
 
-    for segment, speaker in zip(audio_segments[1:], speakers[1:]):
-        if speaker == prev_speaker:
-            combined += silence_same_speaker + segment
+    for i, (segment, speaker) in enumerate(zip(audio_segments[1:], speakers[1:])):
+        override = pause_overrides[i] if pause_overrides else None
+        if override is not None:
+            gap = AudioSegment.silent(duration=override)
+        elif speaker == prev_speaker:
+            gap = AudioSegment.silent(duration=same_speaker_pause_ms)
         else:
-            combined += silence_between_speakers + segment
+            gap = AudioSegment.silent(duration=pause_ms)
+        combined += gap + segment
         prev_speaker = speaker
 
     return combined
+
+
+def compute_timeline(chunks_with_audio, pause_ms=DEFAULT_PAUSE_MS,
+                     same_speaker_pause_ms=SAME_SPEAKER_PAUSE_MS):
+    """Compute a timeline of (chunk, segment, abs_start_ms) tuples.
+
+    Args:
+        chunks_with_audio: list of (chunk_dict, AudioSegment) tuples.
+            Each chunk_dict may have an optional 'pause_after' key (int ms)
+            that overrides the default pause inserted after that chunk.
+        pause_ms: Default pause between different speakers.
+        same_speaker_pause_ms: Default pause when same speaker continues.
+
+    Returns:
+        list of (chunk_dict, AudioSegment, abs_start_ms) tuples.
+    """
+    timeline = []
+    cursor_ms = 0
+    prev_speaker = None
+    prev_chunk = None
+
+    for chunk, segment in chunks_with_audio:
+        if prev_speaker is not None:
+            override = prev_chunk.get("pause_after")
+            if override is not None:
+                gap = int(override)
+            elif chunk["speaker"] == prev_speaker:
+                gap = same_speaker_pause_ms
+            else:
+                gap = pause_ms
+            cursor_ms += gap
+
+        timeline.append((chunk, segment, cursor_ms))
+        cursor_ms += len(segment)
+        prev_speaker = chunk["speaker"]
+        prev_chunk = chunk
+
+    return timeline
 
 
 class TTSEngine:

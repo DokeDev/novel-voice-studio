@@ -10,6 +10,7 @@ import time
 from tts import (
     TTSEngine,
     combine_audio_with_pauses,
+    compute_timeline,
     sanitize_filename,
     DEFAULT_PAUSE_MS,
     SAME_SPEAKER_PAUSE_MS
@@ -34,6 +35,14 @@ def _is_structural_text(text):
     return False
 
 
+def _make_chunk(speaker, text, instruct, pause_after=None):
+    """Build a chunk dict, omitting pause_after when None for clean JSON."""
+    chunk = {"speaker": speaker, "text": text, "instruct": instruct}
+    if pause_after is not None:
+        chunk["pause_after"] = pause_after
+    return chunk
+
+
 def group_into_chunks(script_entries, max_chars=MAX_CHUNK_CHARS):
     """Group consecutive entries by same speaker into chunks up to max_chars"""
     if not script_entries:
@@ -43,6 +52,7 @@ def group_into_chunks(script_entries, max_chars=MAX_CHUNK_CHARS):
     current_speaker = get_speaker(script_entries[0])
     current_text = script_entries[0].get("text", "")
     current_instruct = script_entries[0].get("instruct", "")
+    current_pause_after = script_entries[0].get("pause_after")
 
     for entry in script_entries[1:]:
         speaker = get_speaker(entry)
@@ -56,30 +66,22 @@ def group_into_chunks(script_entries, max_chars=MAX_CHUNK_CHARS):
             combined = current_text + " " + text
             if len(combined) <= max_chars:
                 current_text = combined
+                # Last merged entry's pause_after wins
+                current_pause_after = entry.get("pause_after", current_pause_after)
             else:
-                chunks.append({
-                    "speaker": current_speaker,
-                    "text": current_text,
-                    "instruct": current_instruct,
-                })
+                chunks.append(_make_chunk(current_speaker, current_text, current_instruct, current_pause_after))
                 current_text = text
                 current_instruct = instruct
+                current_pause_after = entry.get("pause_after")
         else:
-            chunks.append({
-                "speaker": current_speaker,
-                "text": current_text,
-                "instruct": current_instruct,
-            })
+            chunks.append(_make_chunk(current_speaker, current_text, current_instruct, current_pause_after))
             current_speaker = speaker
             current_text = text
             current_instruct = instruct
+            current_pause_after = entry.get("pause_after")
 
     # Don't forget the last chunk
-    chunks.append({
-        "speaker": current_speaker,
-        "text": current_text,
-        "instruct": current_instruct,
-    })
+    chunks.append(_make_chunk(current_speaker, current_text, current_instruct, current_pause_after))
 
     return chunks
 
@@ -117,6 +119,14 @@ class ProjectManager:
         except Exception as e:
             print(f"Failed to initialize TTS engine: {e}")
             return None
+
+    def _load_tts_config(self):
+        """Load TTS config section from config.json for pause defaults."""
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                return json.load(f).get("tts", {})
+        except Exception:
+            return {}
 
     def load_chunks(self):
         if os.path.exists(self.chunks_path):
@@ -262,6 +272,13 @@ class ProjectManager:
             if "instruct" in data: chunk["instruct"] = data["instruct"]
             if "speaker" in data: chunk["speaker"] = data["speaker"]
 
+            # pause_after: set or clear (None removes the key)
+            if "pause_after" in data:
+                if data["pause_after"] is not None:
+                    chunk["pause_after"] = max(0, int(data["pause_after"]))
+                else:
+                    chunk.pop("pause_after", None)
+
             # If text/instruct/speaker changed, reset status (but keep old audio until regen)
             if "text" in data or "instruct" in data or "speaker" in data:
                 chunk["status"] = "pending"
@@ -373,44 +390,18 @@ class ProjectManager:
                 print(f"Warning: Failed to update chunk {index} status to error: {update_err}")
             return False, str(e)
 
-    def merge_audio(self):
+    def _load_pause_defaults(self):
+        """Return (pause_between_speakers_ms, pause_same_speaker_ms) from config."""
+        tts_cfg = self._load_tts_config()
+        return (
+            tts_cfg.get("pause_between_speakers_ms", DEFAULT_PAUSE_MS),
+            tts_cfg.get("pause_same_speaker_ms", SAME_SPEAKER_PAUSE_MS),
+        )
+
+    def _load_chunks_with_audio(self):
+        """Load chunks and pair each with its AudioSegment. Returns list of (chunk, segment)."""
         chunks = self.load_chunks()
-        audio_segments = []
-        speakers = []
-
-        for chunk in chunks:
-            path = chunk.get("audio_path")
-            if path:
-                full_path = os.path.join(self.root_dir, path)
-                if os.path.exists(full_path):
-                    try:
-                        # Auto-detect format (mp3 or wav)
-                        segment = AudioSegment.from_file(full_path)
-                        audio_segments.append(segment)
-                        speakers.append(chunk["speaker"])
-                    except Exception as e:
-                        print(f"Error loading audio segment {path}: {e}")
-
-        if not audio_segments:
-            return False, "No audio segments found"
-
-        final_audio = combine_audio_with_pauses(audio_segments, speakers)
-        output_filename = "cloned_audiobook.mp3"
-        output_path = os.path.join(self.root_dir, output_filename)
-        final_audio.export(output_path, format="mp3")
-
-        return True, output_filename
-
-    def export_audacity(self):
-        """Export project as an Audacity-compatible zip with per-speaker WAV tracks,
-        a LOF file for auto-import, and a labels file for chunk annotations."""
-        chunks = self.load_chunks()
-
-        # Phase 1 — Compute timeline (matching merge_audio pause logic exactly)
-        timeline = []  # list of (chunk, segment, abs_start_ms)
-        prev_speaker = None
-        cursor_ms = 0
-
+        result = []
         for chunk in chunks:
             path = chunk.get("audio_path")
             if not path:
@@ -420,25 +411,50 @@ class ProjectManager:
                 continue
             try:
                 segment = AudioSegment.from_file(full_path)
+                result.append((chunk, segment))
             except Exception as e:
-                print(f"Error loading audio for Audacity export {path}: {e}")
-                continue
+                print(f"Error loading audio segment {path}: {e}")
+        return result
 
-            speaker = chunk["speaker"]
-            if prev_speaker is not None:
-                if speaker == prev_speaker:
-                    cursor_ms += SAME_SPEAKER_PAUSE_MS
-                else:
-                    cursor_ms += DEFAULT_PAUSE_MS
+    def merge_audio(self):
+        chunks_with_audio = self._load_chunks_with_audio()
+        if not chunks_with_audio:
+            return False, "No audio segments found"
 
-            timeline.append((chunk, segment, cursor_ms))
-            cursor_ms += len(segment)
-            prev_speaker = speaker
+        pause_ms, same_speaker_pause_ms = self._load_pause_defaults()
+        timeline = compute_timeline(chunks_with_audio, pause_ms, same_speaker_pause_ms)
+
+        # Build final audio from timeline
+        audio_segments = [seg for _, seg, _ in timeline]
+        speakers = [chunk["speaker"] for chunk, _, _ in timeline]
+        pause_overrides = [chunk.get("pause_after") for chunk, _, _ in timeline]
+
+        final_audio = combine_audio_with_pauses(
+            audio_segments, speakers, pause_ms, same_speaker_pause_ms, pause_overrides
+        )
+        output_filename = "cloned_audiobook.mp3"
+        output_path = os.path.join(self.root_dir, output_filename)
+        final_audio.export(output_path, format="mp3")
+
+        return True, output_filename
+
+    def export_audacity(self):
+        """Export project as an Audacity-compatible zip with per-speaker WAV tracks,
+        a LOF file for auto-import, and a labels file for chunk annotations."""
+        chunks_with_audio = self._load_chunks_with_audio()
+        if not chunks_with_audio:
+            return False, "No audio segments found"
+
+        # Phase 1 — Compute timeline
+        pause_ms, same_speaker_pause_ms = self._load_pause_defaults()
+        timeline = compute_timeline(chunks_with_audio, pause_ms, same_speaker_pause_ms)
 
         if not timeline:
             return False, "No audio segments found"
 
-        total_duration_ms = cursor_ms
+        # Total duration = last chunk's start + its length
+        last_chunk, last_seg, last_start = timeline[-1]
+        total_duration_ms = last_start + len(last_seg)
 
         # Phase 2 — Build per-speaker WAV tracks
         speakers_ordered = []
@@ -513,36 +529,13 @@ class ProjectManager:
             tuple: (success: bool, message: str)
         """
         metadata = metadata or {}
-        chunks = self.load_chunks()
+        chunks_with_audio = self._load_chunks_with_audio()
+        if not chunks_with_audio:
+            return False, "No audio segments found"
 
-        # Phase 1 — Compute timeline (same logic as export_audacity)
-        timeline = []  # list of (chunk, segment, abs_start_ms)
-        prev_speaker = None
-        cursor_ms = 0
-
-        for chunk in chunks:
-            path = chunk.get("audio_path")
-            if not path:
-                continue
-            full_path = os.path.join(self.root_dir, path)
-            if not os.path.exists(full_path):
-                continue
-            try:
-                segment = AudioSegment.from_file(full_path)
-            except Exception as e:
-                print(f"Error loading audio for M4B export {path}: {e}")
-                continue
-
-            speaker = chunk["speaker"]
-            if prev_speaker is not None:
-                if speaker == prev_speaker:
-                    cursor_ms += SAME_SPEAKER_PAUSE_MS
-                else:
-                    cursor_ms += DEFAULT_PAUSE_MS
-
-            timeline.append((chunk, segment, cursor_ms))
-            cursor_ms += len(segment)
-            prev_speaker = speaker
+        # Phase 1 — Compute timeline
+        pause_ms, same_speaker_pause_ms = self._load_pause_defaults()
+        timeline = compute_timeline(chunks_with_audio, pause_ms, same_speaker_pause_ms)
 
         if not timeline:
             return False, "No audio segments found"
@@ -554,7 +547,10 @@ class ProjectManager:
         # Phase 3 — Combine audio and export to temp WAV
         audio_segments = [seg for _, seg, _ in timeline]
         speakers = [chunk["speaker"] for chunk, _, _ in timeline]
-        final_audio = combine_audio_with_pauses(audio_segments, speakers)
+        pause_overrides = [chunk.get("pause_after") for chunk, _, _ in timeline]
+        final_audio = combine_audio_with_pauses(
+            audio_segments, speakers, pause_ms, same_speaker_pause_ms, pause_overrides
+        )
 
         temp_wav = os.path.join(self.root_dir, "temp_m4b_combined.wav")
         meta_path = os.path.join(self.root_dir, "temp_m4b_meta.txt")
