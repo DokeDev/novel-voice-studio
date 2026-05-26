@@ -14,6 +14,36 @@ def extract_json_object(text):
     start = text.find('{')
     if start == -1:
         return None
+    depth = 0
+    in_str = False
+    esc = False
+    end = None
+    for i, ch in enumerate(text[start:], start):
+        if esc:
+            esc = False
+            continue
+        if ch == '\\':
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end is None:
+        return None
+    obj_text = text[start:end]
+    try:
+        return json.loads(obj_text)
+    except Exception:
+        return None
 
 
 def normalize_speaker_name(name):
@@ -51,36 +81,6 @@ def parse_alias_decision(text):
         "ref_text": str(parsed.get("ref_text", "") or "").strip(),
         "reason": str(parsed.get("reason", "") or "").strip()
     }
-    depth = 0
-    in_str = False
-    esc = False
-    end = None
-    for i, ch in enumerate(text[start:], start):
-        if esc:
-            esc = False
-            continue
-        if ch == '\\':
-            esc = True
-            continue
-        if ch == '"':
-            in_str = not in_str
-            continue
-        if in_str:
-            continue
-        if ch == '{':
-            depth += 1
-        elif ch == '}':
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    if end is None:
-        return None
-    obj_text = text[start:end]
-    try:
-        return json.loads(obj_text)
-    except Exception:
-        return None
 
 
 def main():
