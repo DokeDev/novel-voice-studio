@@ -323,6 +323,14 @@
                             <i class="fas fa-check-double me-2"></i>Review Script (Optional)
                         </button>
                         <small class="text-muted">Runs a second LLM pass to fix speaker misattributions or formatting issues. Only needed if the generated script has problems.</small>
+                        <div class="input-group mt-1">
+                            <span class="input-group-text">Context Window</span>
+                            <input type="number" class="form-control" id="review-context-window" value="4" min="1" max="12">
+                            <button class="btn btn-outline-primary" id="btn-review-script-contextual" type="button">
+                                <i class="fas fa-crosshairs me-2"></i>Contextual Review (+/- N)
+                            </button>
+                        </div>
+                        <small class="text-muted">Reviews each dialog with N entries before and after to fix missed segmentation and wrong speaker labels in difficult author styles.</small>
                     </div>
                 </div>
             </div>
@@ -1263,6 +1271,17 @@
                 pollLogs('review', 'script-logs');
             } catch (e) {
                 showToast("Failed to start review: " + e.message, 'error');
+            }
+        });
+
+        document.getElementById('btn-review-script-contextual').addEventListener('click', async () => {
+            try {
+                const rawWindow = parseInt(document.getElementById('review-context-window').value, 10);
+                const windowSize = Number.isFinite(rawWindow) ? Math.max(1, Math.min(rawWindow, 12)) : 4;
+                await API.post('/api/review_script_contextual', { window_size: windowSize });
+                pollLogs('review', 'script-logs');
+            } catch (e) {
+                showToast("Failed to start contextual review: " + e.message, 'error');
             }
         });
 

@@ -3,6 +3,7 @@ import sys
 import json
 import time
 import re
+import argparse
 from openai import OpenAI
 
 from tts import TTSEngine, sanitize_filename
@@ -13,6 +14,43 @@ def extract_json_object(text):
     start = text.find('{')
     if start == -1:
         return None
+
+
+def normalize_speaker_name(name):
+    if not isinstance(name, str):
+        return ""
+    s = name.strip().lower()
+    # Remove common honorifics and punctuation for alias heuristics
+    s = re.sub(r'^(mr|mrs|ms|miss|dr|prof|sir|lady|lord)\.?\s+', '', s)
+    s = re.sub(r'[^a-z0-9\s]', '', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def pick_ref_text(lines):
+    for ln in lines:
+        if ln and len(ln.strip()) >= 12:
+            return ln.strip()
+    return next((ln.strip() for ln in lines if ln and ln.strip()), "")
+
+
+def parse_alias_decision(text):
+    parsed = extract_json_object(text)
+    if not parsed:
+        return {
+            "is_alias": False,
+            "alias_of": "",
+            "description": "",
+            "ref_text": "",
+            "reason": "unparseable"
+        }
+    return {
+        "is_alias": bool(parsed.get("is_alias", False)),
+        "alias_of": str(parsed.get("alias_of", "") or "").strip(),
+        "description": str(parsed.get("description", "") or "").strip(),
+        "ref_text": str(parsed.get("ref_text", "") or "").strip(),
+        "reason": str(parsed.get("reason", "") or "").strip()
+    }
     depth = 0
     in_str = False
     esc = False
@@ -46,6 +84,13 @@ def extract_json_object(text):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Generate personas for speakers in annotated script")
+    parser.add_argument("--new-only", action="store_true", help="Process only speakers missing from voice_config.json")
+    parser.add_argument("--alias-check", action="store_true", help="Use LLM + heuristics to decide alias_of vs truly new character")
+    parser.add_argument("--speakers", default="", help="Optional comma-separated speaker allowlist")
+    parser.add_argument("--narration-window", type=int, default=4, help="How many preceding narrator lines to include as intro context")
+    args = parser.parse_args()
+
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     script_path = os.path.join(root, "annotated_script.json")
     voice_config_path = os.path.join(root, "voice_config.json")
@@ -58,13 +103,30 @@ def main():
     with open(script_path, "r", encoding="utf-8") as f:
         script = json.load(f)
 
-    # Collect sample lines per speaker
+    # Collect sample lines per speaker + first-appearance narrator context
     samples = {}
-    for entry in script:
+    first_index = {}
+    for i, entry in enumerate(script):
         speaker = (entry.get("speaker") or entry.get("type") or "").strip()
         if not speaker:
             continue
         samples.setdefault(speaker, []).append(entry.get("text", "").strip())
+        if speaker not in first_index:
+            first_index[speaker] = i
+
+    narrator_context = {}
+    window = max(1, int(args.narration_window or 4))
+    for speaker, idx in first_index.items():
+        context_lines = []
+        j = idx - 1
+        while j >= 0 and len(context_lines) < window:
+            prev = script[j]
+            prev_speaker = (prev.get("speaker") or prev.get("type") or "").strip().upper()
+            prev_text = (prev.get("text") or "").strip()
+            if prev_speaker == "NARRATOR" and prev_text:
+                context_lines.append(prev_text)
+            j -= 1
+        narrator_context[speaker] = list(reversed(context_lines))
 
     # Load LLM config
     config = {}
@@ -93,20 +155,75 @@ def main():
 
     engine = TTSEngine({"tts": config.get("tts", {})})
 
-    for speaker, lines in samples.items():
+    selected_speakers = list(samples.keys())
+    if args.new_only:
+        selected_speakers = [s for s in selected_speakers if s not in voice_config]
+    if args.speakers.strip():
+        allow = {s.strip() for s in args.speakers.split(",") if s.strip()}
+        selected_speakers = [s for s in selected_speakers if s in allow]
+
+    if not selected_speakers:
+        print("No speakers to process.")
+        return
+
+    print(f"Processing {len(selected_speakers)} speakers")
+
+    for speaker in selected_speakers:
+        lines = samples.get(speaker, [])
         try:
             print(f"Generating persona for: {speaker} ({len(lines)} lines samples)")
 
+            # Alias check: fast heuristic first, then optional LLM adjudication
+            existing_names = [n for n in voice_config.keys() if n != speaker]
+            norm_self = normalize_speaker_name(speaker)
+            heuristic_alias = ""
+            for candidate in existing_names:
+                if normalize_speaker_name(candidate) == norm_self and norm_self:
+                    heuristic_alias = candidate
+                    break
+
+            if heuristic_alias:
+                print(f"Heuristic alias detected: {speaker} -> {heuristic_alias}")
+                voice_entry = voice_config.get(speaker, {})
+                voice_entry.update({
+                    "alias_of": heuristic_alias,
+                    "seed": voice_entry.get("seed", -1),
+                })
+                voice_config[speaker] = voice_entry
+                continue
+
             # Build prompt with up to 8 representative lines
             sample_text = "\n".join(lines[:8])
-            user_prompt = (
-                f"You are a voice designer assistant. Given the following example lines spoken by a character named '{speaker}':\n\n"
-                f"{sample_text}\n\n"
-                "Produce a JSON object with two keys: 'description' and 'ref_text'.\n"
-                "- 'description': a concise natural-language voice persona describing age, gender, timbre, accent, speaking rate, typical emotional tone, and delivery guidance (2-3 sentences).\n"
-                "- 'ref_text': a 1-2 sentence short sample (one or two sentences) that best captures this character's voice and can be used as a TTS reference.\n"
-                "Only output the JSON object and nothing else."
-            )
+
+            intro_ctx = narrator_context.get(speaker, [])
+            intro_blob = "\n".join(intro_ctx) if intro_ctx else "(No nearby narrator intro lines found.)"
+
+            if args.alias_check:
+                candidate_blob = "\n".join(f"- {name}" for name in existing_names) if existing_names else "(none)"
+                user_prompt = (
+                    f"You are a voice-casting assistant. A speaker named '{speaker}' appeared in an audiobook script.\n\n"
+                    f"Narrator context before first appearance (most useful for introductions):\n{intro_blob}\n\n"
+                    f"Sample spoken lines by '{speaker}':\n{sample_text}\n\n"
+                    f"Existing configured characters:\n{candidate_blob}\n\n"
+                    "Decide whether this is an alias/variant of an existing character or truly a new character.\n"
+                    "Return ONLY one JSON object with keys:\n"
+                    "- is_alias: boolean\n"
+                    "- alias_of: string (existing character name if alias, else empty string)\n"
+                    "- reason: short reason\n"
+                    "- description: if new character, concise natural-language persona (age, gender, timbre, accent, pace, tone, delivery) in 2-3 sentences\n"
+                    "- ref_text: if new character, 1-2 sentence representative sample\n"
+                    "If uncertain, prefer is_alias=false."
+                )
+            else:
+                user_prompt = (
+                    f"You are a voice designer assistant. Given the following narrator-intro context and lines by character '{speaker}':\n\n"
+                    f"Narrator context before first appearance:\n{intro_blob}\n\n"
+                    f"Character lines:\n{sample_text}\n\n"
+                    "Produce a JSON object with two keys: 'description' and 'ref_text'.\n"
+                    "- 'description': a concise natural-language voice persona describing age, gender, timbre, accent, speaking rate, typical emotional tone, and delivery guidance (2-3 sentences).\n"
+                    "- 'ref_text': a 1-2 sentence short sample that best captures this character's voice and can be used as a TTS reference.\n"
+                    "Only output the JSON object and nothing else."
+                )
 
             response = client.chat.completions.create(
                 model=model_name,
@@ -119,21 +236,34 @@ def main():
             )
 
             text = response.choices[0].message.content.strip()
-            parsed = extract_json_object(text)
-            if not parsed:
-                print(f"Warning: LLM did not return parseable JSON for {speaker}. Response preview:\n{text[:300]}")
-                continue
-
-            description = parsed.get("description", "").strip()
-            ref_text = parsed.get("ref_text", "").strip()
+            if args.alias_check:
+                decision = parse_alias_decision(text)
+                if decision["is_alias"] and decision["alias_of"] in existing_names:
+                    print(f"LLM alias detected: {speaker} -> {decision['alias_of']} ({decision['reason']})")
+                    voice_entry = voice_config.get(speaker, {})
+                    voice_entry.update({
+                        "alias_of": decision["alias_of"],
+                        "seed": voice_entry.get("seed", -1),
+                    })
+                    voice_config[speaker] = voice_entry
+                    continue
+                description = decision["description"]
+                ref_text = decision["ref_text"]
+            else:
+                parsed = extract_json_object(text)
+                if not parsed:
+                    print(f"Warning: LLM did not return parseable JSON for {speaker}. Response preview:\n{text[:300]}")
+                    continue
+                description = str(parsed.get("description", "") or "").strip()
+                ref_text = str(parsed.get("ref_text", "") or "").strip()
 
             if not description:
                 print(f"Warning: Empty description for {speaker}, skipping")
                 continue
 
             if not ref_text:
-                # Fallback: use first non-empty sample line
-                ref_text = next((ln for ln in lines if ln), "")
+                # Fallback: use first representative sample line
+                ref_text = pick_ref_text(lines)
 
             # Generate a VoiceDesign preview and save stable copy
             try:
