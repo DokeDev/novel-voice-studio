@@ -250,6 +250,10 @@ class DatasetBuilderUpdateRowsRequest(BaseModel):
 class ContextualReviewRequest(BaseModel):
     window_size: int = 4
 
+class GeneratePersonasRequest(BaseModel):
+    advanced: bool = False
+    batch_size: int = 40
+
 # Global state for process tracking
 process_state = {
     "script": {"running": False, "logs": []},
@@ -684,8 +688,13 @@ async def get_voices():
     # Combine with config
     voice_config = {}
     if os.path.exists(VOICE_CONFIG_PATH):
-        with open(VOICE_CONFIG_PATH, "r", encoding="utf-8") as f:
-            voice_config = json.load(f)
+        try:
+            with open(VOICE_CONFIG_PATH, "r", encoding="utf-8") as f:
+                voice_config = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            voice_config = {}
+
+    missing_speakers = {voice_name for voice_name in voices_list if not voice_config.get(voice_name)}
 
     result = []
     for voice_name in voices_list:
@@ -707,7 +716,7 @@ async def parse_voices(background_tasks: BackgroundTasks):
 
 
 @app.post("/api/generate_personas")
-async def generate_personas(background_tasks: BackgroundTasks):
+async def generate_personas(background_tasks: BackgroundTasks, request: GeneratePersonasRequest = GeneratePersonasRequest()):
     """Generate LLM-derived voice persona descriptions and VoiceDesign previews.
 
     This runs `app/generate_personas.py` which:
@@ -720,8 +729,12 @@ async def generate_personas(background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Persona generation already running")
 
     process_state["persona"]["cancel"] = False
-    background_tasks.add_task(run_process, [sys.executable, "-u", "generate_personas.py"], "persona")
-    return {"status": "started"}
+    command = [sys.executable, "-u", "generate_personas.py"]
+    if request.advanced:
+        batch_size = max(1, min(int(request.batch_size or 40), 200))
+        command.extend(["--advanced", "--batch-size", str(batch_size)])
+    background_tasks.add_task(run_process, command, "persona")
+    return {"status": "started", "advanced": request.advanced}
 
 
 @app.post("/api/cancel_persona")
@@ -1021,7 +1034,7 @@ async def generate_batch_fast_endpoint(request: BatchGenerateRequest, background
                 seed_val = tts_cfg.get("batch_seed")
                 if seed_val is not None and seed_val != "":
                     batch_seed = int(seed_val)
-                batch_size = max(1, tts_cfg.get("parallel_workers", 4))
+                batch_size = max(1, tts_cfg.get("batch_size", 4))
                 batch_group_by_type = tts_cfg.get("batch_group_by_type", False)
         except (json.JSONDecodeError, ValueError):
             pass
@@ -1076,17 +1089,17 @@ async def cancel_audio():
         process_state["audio"]["cancel"] = True
         process_state["audio"]["logs"].append("[CANCEL] Cancellation requested")
         return {"status": "cancelling"}
-    # Not running — still reset any stuck "generating" chunks (e.g. from a crash)
+    
+    reset_count = 0
     chunks = project_manager.load_chunks()
     if chunks:
-        reset_count = 0
         for chunk in chunks:
             if chunk.get("status") == "generating":
                 chunk["status"] = "pending"
                 reset_count += 1
         if reset_count:
             project_manager.save_chunks(chunks)
-    return {"status": "not_running", "reset_chunks": reset_count if chunks else 0}
+    return {"status": "not_running", "reset_chunks": reset_count}
 
 ## ── Saved Scripts ──────────────────────────────────────────────
 
