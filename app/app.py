@@ -146,15 +146,17 @@ def get_gpu_stats():
                 timeout=2
             )
             if result.returncode == 0:
-                json_lines = [line for line in result.stdout.split('\n') if line.strip().startswith('{')]
-                if json_lines:
-                    data = json.loads(json_lines[0])
-                    for card_key, card_data in data.items():
-                        gpu_use_str = card_data.get('GPU use (%)', 'N/A')
-                        if gpu_use_str != 'N/A':
+                data = json.loads(result.stdout)
+                for card_key, card_data in data.items():
+                    if not isinstance(card_data, dict):
+                        continue
+                    for key in ('GPU use (%)', 'GPU Use (%)', 'GPU Activity'):
+                        gpu_use_str = card_data.get(key)
+                        if gpu_use_str is not None and gpu_use_str != 'N/A':
                             stats['utilization_percent'] = float(gpu_use_str)
-                        break 
-        except:
+                            break
+                    break
+        except Exception:
             stats['utilization_percent'] = None
 
     except Exception as e:
@@ -169,7 +171,7 @@ def check_disk_space(path, required_gb):
         stat = shutil.disk_usage(path)
         free_gb = stat.free / (1024 ** 3)
         return free_gb >= required_gb, free_gb
-    except:
+    except Exception:
         return True, 0
 
 @app.get("/api/system/stats")
