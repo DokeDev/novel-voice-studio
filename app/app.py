@@ -15,9 +15,11 @@ import time
 import threading
 import zipfile
 import subprocess
+import tempfile
 import aiofiles
 from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
+from math import ceil
 
 # Import ProjectManager
 from project import ProjectManager
@@ -245,10 +247,18 @@ class DatasetBuilderUpdateRowsRequest(BaseModel):
     name: str
     rows: List[dict]  # [{emotion, text, seed}]
 
+class ContextualReviewRequest(BaseModel):
+    window_size: int = 4
+
+class GeneratePersonasRequest(BaseModel):
+    advanced: bool = False
+    batch_size: int = 40
+
 # Global state for process tracking
 process_state = {
     "script": {"running": False, "logs": []},
     "voices": {"running": False, "logs": []},
+    "persona": {"running": False, "logs": [], "cancel": False, "process": None},
     "audio": {"running": False, "logs": [], "cancel": False},
     "audacity_export": {"running": False, "logs": []},
     "m4b_export": {"running": False, "logs": []},
@@ -278,6 +288,7 @@ def run_process(command: List[str], task_name: str):
             universal_newlines=True,
             env=env,
         )
+        process_state[task_name]["process"] = process
 
         for line in process.stdout:
             log_line = line.strip()
@@ -299,7 +310,24 @@ def run_process(command: List[str], task_name: str):
         logger.error(f"Error running {task_name}: {e}")
         process_state[task_name]["logs"].append(f"Error: {str(e)}")
     finally:
+        process_state[task_name]["process"] = None
         process_state[task_name]["running"] = False
+
+
+def _atomic_json_write(data, target_path):
+    """Write JSON atomically to avoid partial files on crashes."""
+    directory = os.path.dirname(target_path) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", suffix=".json", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, target_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 # Endpoints
 
@@ -581,6 +609,46 @@ async def review_script(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_process, [sys.executable, "-u", "review_script.py"], "review")
     return {"status": "started"}
 
+@app.post("/api/review_script_contextual")
+async def review_script_contextual(request: ContextualReviewRequest, background_tasks: BackgroundTasks):
+    if not os.path.exists(SCRIPT_PATH):
+        raise HTTPException(status_code=400, detail="No annotated script found. Generate a script first.")
+
+    if process_state["review"]["running"]:
+        raise HTTPException(status_code=400, detail="Script review already running")
+
+    window_size = max(1, min(int(request.window_size or 4), 12))
+    total_entries = 0
+    try:
+        with open(SCRIPT_PATH, "r", encoding="utf-8") as f:
+            total_entries = len(json.load(f))
+    except (json.JSONDecodeError, ValueError, OSError):
+        total_entries = 0
+
+    review_batch_size = 25
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                review_batch_size = max(1, int(cfg.get("generation", {}).get("review_batch_size", 25)))
+        except (json.JSONDecodeError, ValueError, TypeError, OSError):
+            review_batch_size = 25
+
+    estimated_calls = ceil(total_entries / review_batch_size) if total_entries else 0
+    background_tasks.add_task(
+        run_process,
+        [sys.executable, "-u", "review_script.py", "--context-window", str(window_size)],
+        "review"
+    )
+    return {
+        "status": "started",
+        "mode": "contextual",
+        "window_size": window_size,
+        "batch_size": review_batch_size,
+        "total_entries": total_entries,
+        "estimated_calls": estimated_calls,
+    }
+
 @app.get("/api/annotated_script")
 async def get_annotated_script():
     """Return the current working annotated_script.json."""
@@ -593,7 +661,9 @@ async def get_annotated_script():
 async def get_status(task_name: str):
     if task_name not in process_state:
         raise HTTPException(status_code=404, detail="Task not found")
-    return process_state[task_name]
+    state = dict(process_state[task_name])
+    state.pop("process", None)
+    return state
 
 @app.get("/api/voices")
 async def get_voices():
@@ -609,9 +679,6 @@ async def get_voices():
                 if speaker:
                     voices_set.add(speaker)
             voices_list = sorted(voices_set)
-            # Update voices.json for compatibility with other tools
-            with open(VOICES_PATH, "w", encoding="utf-8") as f:
-                json.dump(voices_list, f, indent=2, ensure_ascii=False)
         except (json.JSONDecodeError, ValueError):
             pass
 
@@ -621,15 +688,21 @@ async def get_voices():
     # Combine with config
     voice_config = {}
     if os.path.exists(VOICE_CONFIG_PATH):
-        with open(VOICE_CONFIG_PATH, "r", encoding="utf-8") as f:
-            voice_config = json.load(f)
+        try:
+            with open(VOICE_CONFIG_PATH, "r", encoding="utf-8") as f:
+                voice_config = json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            voice_config = {}
+
+    missing_speakers = {voice_name for voice_name in voices_list if not voice_config.get(voice_name)}
 
     result = []
     for voice_name in voices_list:
         config = voice_config.get(voice_name, {})
         result.append({
             "name": voice_name,
-            "config": config
+            "config": config,
+            "persona_pending": voice_name in missing_speakers
         })
     return result
 
@@ -640,6 +713,46 @@ async def parse_voices(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(run_process, [sys.executable, "-u", "parse_voices.py"], "voices")
     return {"status": "started"}
+
+
+@app.post("/api/generate_personas")
+async def generate_personas(background_tasks: BackgroundTasks, request: GeneratePersonasRequest = GeneratePersonasRequest()):
+    """Generate LLM-derived voice persona descriptions and VoiceDesign previews.
+
+    This runs `app/generate_personas.py` which:
+    - reads `annotated_script.json`,
+    - asks the configured LLM to produce a short `description` and `ref_text` for each character,
+    - uses the VoiceDesign model to synthesize a preview and saves it,
+    - updates `voice_config.json` with a clone-style reference for each character.
+    """
+    if process_state["persona"]["running"]:
+        raise HTTPException(status_code=400, detail="Persona generation already running")
+
+    process_state["persona"]["cancel"] = False
+    command = [sys.executable, "-u", "generate_personas.py"]
+    if request.advanced:
+        batch_size = max(1, min(int(request.batch_size or 40), 200))
+        command.extend(["--advanced", "--batch-size", str(batch_size)])
+    background_tasks.add_task(run_process, command, "persona")
+    return {"status": "started", "advanced": request.advanced}
+
+
+@app.post("/api/cancel_persona")
+async def cancel_persona():
+    if not process_state["persona"]["running"]:
+        return {"status": "idle"}
+
+    process_state["persona"]["cancel"] = True
+    process_state["persona"]["logs"].append("[CANCEL] Cancellation requested")
+
+    proc = process_state["persona"].get("process")
+    if proc and proc.poll() is None:
+        try:
+            proc.terminate()
+        except Exception as e:
+            logger.warning(f"Failed to terminate persona process cleanly: {e}")
+
+    return {"status": "cancelling"}
 
 @app.post("/api/save_voice_config")
 async def save_voice_config(config_data: Dict[str, VoiceConfigItem]):
@@ -659,8 +772,7 @@ async def save_voice_config(config_data: Dict[str, VoiceConfigItem]):
         # Convert Pydantic model to dict
         current_config[voice_name] = config.model_dump()
 
-    with open(VOICE_CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(current_config, f, indent=2, ensure_ascii=False)
+    _atomic_json_write(current_config, VOICE_CONFIG_PATH)
 
     return {"status": "saved"}
 
@@ -922,7 +1034,7 @@ async def generate_batch_fast_endpoint(request: BatchGenerateRequest, background
                 seed_val = tts_cfg.get("batch_seed")
                 if seed_val is not None and seed_val != "":
                     batch_seed = int(seed_val)
-                batch_size = max(1, tts_cfg.get("parallel_workers", 4))
+                batch_size = max(1, tts_cfg.get("batch_size", 4))
                 batch_group_by_type = tts_cfg.get("batch_group_by_type", False)
         except (json.JSONDecodeError, ValueError):
             pass
@@ -977,17 +1089,17 @@ async def cancel_audio():
         process_state["audio"]["cancel"] = True
         process_state["audio"]["logs"].append("[CANCEL] Cancellation requested")
         return {"status": "cancelling"}
-    # Not running — still reset any stuck "generating" chunks (e.g. from a crash)
+    
+    reset_count = 0
     chunks = project_manager.load_chunks()
     if chunks:
-        reset_count = 0
         for chunk in chunks:
             if chunk.get("status") == "generating":
                 chunk["status"] = "pending"
                 reset_count += 1
         if reset_count:
             project_manager.save_chunks(chunks)
-    return {"status": "not_running", "reset_chunks": reset_count if chunks else 0}
+    return {"status": "not_running", "reset_chunks": reset_count}
 
 ## ── Saved Scripts ──────────────────────────────────────────────
 
@@ -1093,8 +1205,7 @@ def _load_manifest(path):
 
 def _save_manifest(path, manifest):
     """Write a JSON manifest file."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    _atomic_json_write(manifest, path)
 
 @app.post("/api/voice_design/preview")
 async def voice_design_preview(request: VoiceDesignPreviewRequest):

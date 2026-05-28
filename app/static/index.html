@@ -36,7 +36,7 @@
         .step-active { background-color: #0d6efd; color: white; }
         .voice-card { border-left: 4px solid #0d6efd; }
         /* Editor row expand/collapse */
-        .chunk-expand-btn {
+        .chunk-action-btn {
             border: none;
             background: none;
             padding: 2px 4px;
@@ -45,7 +45,7 @@
             font-size: 0.85em;
             transition: transform 0.2s ease;
         }
-        .chunk-row.expanded .chunk-expand-btn {
+        .chunk-row.expanded .chunk-toggle-btn {
             transform: rotate(180deg);
         }
         /* Core pipeline tabs - green */
@@ -323,6 +323,15 @@
                             <i class="fas fa-check-double me-2"></i>Review Script (Optional)
                         </button>
                         <small class="text-muted">Runs a second LLM pass to fix speaker misattributions or formatting issues. Only needed if the generated script has problems.</small>
+                        <div class="input-group mt-1">
+                            <span class="input-group-text">Context Window</span>
+                            <input type="number" class="form-control" id="review-context-window" value="4" min="1" max="12">
+                            <button class="btn btn-outline-primary" id="btn-review-script-contextual" type="button">
+                                <i class="fas fa-crosshairs me-2"></i>Contextual Review (+/- N)
+                            </button>
+                        </div>
+                        <small class="text-muted" id="review-context-estimate">Contextual review runs in batched LLM calls and will show an estimate after you start it.</small>
+                        <small class="text-muted">Reviews each dialog with N entries before and after to fix missed segmentation and wrong speaker labels in difficult author styles.</small>
                     </div>
                 </div>
             </div>
@@ -359,6 +368,19 @@
                 </div>
                 <div class="card-body">
                     <p>Voices are detected from the generated script. Changes are saved automatically.</p>
+                    <div class="d-flex align-items-center gap-3 mb-2 flex-wrap">
+                        <button class="btn btn-outline-primary" id="btn-gen-personas" onclick="generatePersonas()"><i class="fas fa-user-robot me-1"></i>Generate Personas</button>
+                        <div class="form-check form-switch m-0">
+                            <input class="form-check-input" type="checkbox" id="advanced-persona-toggle" onchange="toggleAdvancedPersonaOptions()">
+                            <label class="form-check-label" for="advanced-persona-toggle">Advanced</label>
+                        </div>
+                        <div class="input-group input-group-sm" id="advanced-persona-options" style="width: 135px; display:none;">
+                            <span class="input-group-text">Batch</span>
+                            <input class="form-control" id="persona-batch-size" type="number" min="1" max="200" value="40">
+                        </div>
+                        <button class="btn btn-outline-danger" id="btn-cancel-personas" onclick="cancelPersonas()" style="display:none;"><i class="fas fa-stop me-1"></i>Cancel</button>
+                        <span id="persona-status" class="text-muted small"></span>
+                    </div>
                     <div id="voices-list"></div>
                 </div>
             </div>
@@ -412,6 +434,11 @@
                             <div class="col-md-4">
                                 <label class="form-label">Voice Name</label>
                                 <input type="text" class="form-control" id="design-voice-name" placeholder="e.g. Lady Narrator">
+                                <input type="hidden" id="design-source-name" value="">
+                                <label class="form-label small mt-2">Alias of</label>
+                                <select id="design-alias-select" class="form-select form-select-sm">
+                                    <option value="">-- None --</option>
+                                </select>
                             </div>
                             <div class="col-md-2">
                                 <button class="btn btn-success w-100" onclick="saveDesignedVoice()">
@@ -754,7 +781,7 @@
                                      <th width="3%"></th>
                                      <th width="9%">Speaker</th>
                                      <th width="40%">Text</th>
-                                     <th width="14%">Instruct</th>
+                                     <th width="14%">Emotion / Style</th>
                                      <th width="7%">Status</th>
                                      <th width="27%">Audio / Actions</th>
                                  </tr>
@@ -1254,6 +1281,107 @@
             }
         });
 
+        document.getElementById('btn-review-script-contextual').addEventListener('click', async () => {
+            try {
+                const rawWindow = parseInt(document.getElementById('review-context-window').value, 10);
+                const windowSize = Number.isFinite(rawWindow) ? Math.max(1, Math.min(rawWindow, 12)) : 4;
+                const result = await API.post('/api/review_script_contextual', { window_size: windowSize });
+                const estimateEl = document.getElementById('review-context-estimate');
+                if (estimateEl) {
+                    estimateEl.innerText = result.estimated_calls
+                        ? `Estimated LLM calls: ~${result.estimated_calls} for ${result.total_entries} entries with batches of ${result.batch_size}.`
+                        : 'Contextual review started.';
+                }
+                pollLogs('review', 'script-logs');
+            } catch (e) {
+                showToast("Failed to start contextual review: " + e.message, 'error');
+            }
+        });
+
+        // --- Persona Generation ---
+        function toggleAdvancedPersonaOptions() {
+            const advanced = document.getElementById('advanced-persona-toggle');
+            const options = document.getElementById('advanced-persona-options');
+            if (advanced && options) {
+                options.style.display = advanced.checked ? 'flex' : 'none';
+            }
+        }
+
+        async function generatePersonas() {
+            const statusSpan = document.getElementById('persona-status');
+            const cancelButton = document.getElementById('btn-cancel-personas');
+            const advancedToggle = document.getElementById('advanced-persona-toggle');
+            const batchInput = document.getElementById('persona-batch-size');
+            const advanced = !!(advancedToggle && advancedToggle.checked);
+            const batchSize = Math.max(1, Math.min(parseInt(batchInput?.value || '40', 10) || 40, 200));
+            try {
+                statusSpan.innerHTML = `<i class="fas fa-spinner fa-spin me-1"></i>${advanced ? 'Starting advanced...' : 'Starting...'}`;
+                if (cancelButton) {
+                    cancelButton.style.display = '';
+                }
+                await API.post('/api/generate_personas', { advanced, batch_size: batchSize });
+                pollPersonaStatus();
+            } catch (e) {
+                showToast('Failed to start persona generation: ' + e.message, 'error');
+                statusSpan.innerText = '';
+                if (cancelButton) {
+                    cancelButton.style.display = 'none';
+                }
+            }
+        }
+
+        async function cancelPersonas() {
+            try {
+                await API.post('/api/cancel_persona', {});
+                const statusSpan = document.getElementById('persona-status');
+                if (statusSpan) {
+                    statusSpan.innerText = 'Cancelling...';
+                }
+            } catch (e) {
+                showToast('Failed to cancel persona generation: ' + e.message, 'error');
+            }
+        }
+
+        async function pollPersonaStatus() {
+            const logEl = document.getElementById('voices-logs');
+            const statusSpan = document.getElementById('persona-status');
+            const cancelButton = document.getElementById('btn-cancel-personas');
+            const interval = setInterval(async () => {
+                try {
+                    const status = await API.get('/api/status/persona');
+                    const advanced = !!(document.getElementById('advanced-persona-toggle')?.checked);
+                    statusSpan.innerText = status.running ? (advanced ? 'Advanced running...' : 'Running...') : 'Finished';
+                    if (cancelButton) {
+                        cancelButton.style.display = status.running ? '' : 'none';
+                    }
+                    if (logEl) {
+                        logEl.innerText = (status.logs || []).join('\n');
+                        logEl.scrollTop = logEl.scrollHeight;
+                    }
+
+                    if (!status.running) {
+                        clearInterval(interval);
+                        // Refresh voices and caches
+                        try { await loadVoices(); } catch (e) { /* ignore */ }
+                        try { window._designedVoicesCache = await API.get('/api/voice_design/list'); } catch (e) { }
+                        try { window._cloneVoicesCache = await API.get('/api/clone_voices/list'); } catch (e) { }
+                        showToast('Persona generation finished', 'success');
+                        statusSpan.innerText = '';
+                        if (cancelButton) {
+                            cancelButton.style.display = 'none';
+                        }
+                    }
+                } catch (e) {
+                    clearInterval(interval);
+                    showToast('Persona status poll failed: ' + e.message, 'error');
+                    statusSpan.innerText = '';
+                    if (cancelButton) {
+                        cancelButton.style.display = 'none';
+                    }
+                }
+            }, 1500);
+        }
+
         // --- Voices Tab ---
         const AVAILABLE_VOICES = ["Aiden", "Dylan", "Eric", "Ono_anna", "Ryan", "Serena", "Sohee", "Uncle_fu", "Vivian"];
 
@@ -1266,7 +1394,15 @@
                     <div class="card-body">
                         <div class="row">
                             <div class="col-md-3">
-                                <h5 class="card-title">${escapeHtml(voice.name)}</h5>
+                                <h5 class="card-title">${escapeHtml(voice.name)} ${config.alias_of ? `<span class="badge bg-info ms-2" title="Alias of ${escapeHtml(config.alias_of)}">${escapeHtml(config.alias_of)}</span>` : ''}</h5>
+                                <div class="form-text small text-muted mt-1">Alias of:</div>
+                                <select class="form-select form-select-sm alias-select mt-1">
+                                    <option value="">-- None --</option>
+                                    ${(() => {
+                                        const names = (window._voicesNames || []).filter(n => n !== voice.name);
+                                        return names.map(n => `<option value="${escapeHtml(n)}" ${config.alias_of === n ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
+                                    })()}
+                                </select>
                             </div>
                             <div class="col-md-9">
                                 <div class="mb-2">
@@ -1385,6 +1521,11 @@
                                 <div class="design-opts" style="display: ${voiceType === 'design' ? 'block' : 'none'}">
                                     <input type="text" class="form-control design-description mb-1" placeholder="Base voice description (e.g. Young strong soldier)" value="${config.description || ''}">
                                     <span class="text-muted small">Per-line instruct is appended to this description as delivery/emotion direction</span>
+                                    <div class="mt-2">
+                                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="openVoiceDesignEditor(this)">
+                                            <i class="fas fa-wand-magic-sparkles me-1"></i>Re-design Voice
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1416,6 +1557,8 @@
             } catch (e) { /* ignore if no adapters */ }
 
             const voices = await API.get('/api/voices');
+            // Cache simple names for alias dropdowns
+            window._voicesNames = voices.map(v => v.name);
             const container = document.getElementById('voices-list');
             if (voices.length === 0) {
                 container.innerHTML = '<div class="alert alert-info">No voices found. Generate a script first.</div>';
@@ -1435,6 +1578,7 @@
 
             cards.forEach(card => {
                 const name = card.dataset.voice;
+                const alias = card.querySelector('.alias-select') ? card.querySelector('.alias-select').value : '';
                 const type = card.querySelector('.voice-type:checked').value;
 
                 if (type === 'custom') {
@@ -1478,6 +1622,10 @@
                         seed: "-1"
                     };
                 }
+                // Include alias_of if set
+                if (alias) {
+                    config[name].alias_of = alias;
+                }
             });
             return config;
         }
@@ -1513,6 +1661,18 @@
         let isPlayingSequence = false;
         let isRenderingAll = false;
         let cachedChunks = []; // Cache to track changes
+
+        function buildSpeakerSelect(chunk) {
+            const current = (chunk.speaker || '').trim();
+            const names = Array.isArray(window._voicesNames) ? window._voicesNames : [];
+            const normalized = [...new Set(names.map(n => (n || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+            const options = normalized.map(name => `<option value="${escapeHtml(name)}" ${name === current ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('');
+            const unknownOption = current && !normalized.includes(current)
+                ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (custom)</option>`
+                : '';
+
+            return `<select class="form-select form-select-sm" onchange="updateChunk(${chunk.id}, 'speaker', this.value)">${unknownOption}${options}</select>`;
+        }
 
         // Check if any audio is currently playing
         function isAudioPlaying() {
@@ -1658,9 +1818,9 @@
                         return `
                             <tr data-id="${chunk.id}" class="chunk-row">
                                 <td class="text-center align-middle" style="white-space:nowrap;">
-                                    <button class="chunk-expand-btn" onclick="toggleChunkExpand(this)" title="Expand/collapse"><i class="fas fa-chevron-down"></i></button><button class="chunk-expand-btn" onclick="insertChunkAfter(${chunk.id})" title="Insert line below"><i class="fas fa-plus"></i></button><button class="chunk-expand-btn" onclick="deleteChunk(${chunk.id})" title="Delete line"><i class="fas fa-trash" style="color:#dc3545;"></i></button>
+                                    <button class="chunk-action-btn chunk-toggle-btn" onclick="toggleChunkExpand(this)" title="Expand/collapse"><i class="fas fa-chevron-down"></i></button><button class="chunk-action-btn" onclick="insertChunkAfter(${chunk.id})" title="Insert line below"><i class="fas fa-plus"></i></button><button class="chunk-action-btn" onclick="deleteChunk(${chunk.id})" title="Delete line"><i class="fas fa-trash" style="color:#dc3545;"></i></button>
                                 </td>
-                                <td><input type="text" class="form-control form-control-sm" value="${escapeHtml(chunk.speaker)}" onchange="updateChunk(${chunk.id}, 'speaker', this.value)"></td>
+                                <td>${buildSpeakerSelect(chunk)}</td>
                                 <td><textarea class="form-control form-control-sm chunk-text" rows="2" onchange="updateChunk(${chunk.id}, 'text', this.value)">${escapeHtml(chunk.text)}</textarea></td>
                                 <td>
                                     <textarea class="form-control form-control-sm chunk-instruct" rows="2" onchange="updateChunk(${chunk.id}, 'instruct', this.value)" title="Short TTS direction (3-8 words)">${escapeHtml(chunk.instruct || '')}</textarea>
@@ -2430,6 +2590,7 @@
                                     <td class="text-muted" style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(v.description)}</td>
                                     <td>
                                         <button class="btn btn-sm btn-outline-primary me-1" onclick="playDesignedVoice(${JSON.stringify(v.filename)})" title="Play"><i class="fas fa-play"></i></button>
+                                        <button class="btn btn-sm btn-outline-secondary me-1" onclick="openDesignedVoiceForEdit(${JSON.stringify(v.id)})" title="Edit"><i class="fas fa-edit"></i></button>
                                         <button class="btn btn-sm btn-outline-danger" onclick="deleteDesignedVoice(${JSON.stringify(v.id)})" title="Delete"><i class="fas fa-trash"></i></button>
                                     </td>
                                 </tr>
@@ -2452,7 +2613,9 @@
 
             const btn = document.getElementById('btn-design-preview');
             btn.disabled = true;
-            statusEl.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Generating preview (this may take a moment on first run)...';
+            statusEl.innerHTML = window._editingDesignedVoiceId
+                ? '<i class="fas fa-spinner fa-spin me-1"></i>Re-designing preview (this may take a moment)...'
+                : '<i class="fas fa-spinner fa-spin me-1"></i>Generating preview (this may take a moment on first run)...';
             previewContainer.style.display = 'none';
 
             try {
@@ -2464,7 +2627,9 @@
                 const audio = document.getElementById('design-preview-audio');
                 audio.src = result.audio_url + '?t=' + Date.now();
                 previewContainer.style.display = 'block';
-                statusEl.innerHTML = '<span class="text-success"><i class="fas fa-check me-1"></i>Preview ready</span>';
+                statusEl.innerHTML = window._editingDesignedVoiceId
+                    ? '<span class="text-success"><i class="fas fa-check me-1"></i>Voice re-designed</span>'
+                    : '<span class="text-success"><i class="fas fa-check me-1"></i>Preview ready</span>';
 
                 // Extract filename from URL for save
                 window._currentPreviewFile = result.audio_url.split('/').pop().split('?')[0];
@@ -2489,6 +2654,20 @@
                 });
                 document.getElementById('design-voice-name').value = '';
                 loadDesignedVoices();
+                // If we're editing a generated persona, propagate alias choice to voice card and trigger save
+                const source = document.getElementById('design-source-name').value;
+                const selectedAlias = document.getElementById('design-alias-select').value;
+                if (source) {
+                    const card = document.querySelector(`.voice-card[data-voice="${source}"]`);
+                    if (card) {
+                        const aliasSel = card.querySelector('.alias-select');
+                        if (aliasSel) {
+                            aliasSel.value = selectedAlias || '';
+                            // Trigger save via existing auto-save debounce
+                            debouncedSaveVoices();
+                        }
+                    }
+                }
             } catch (e) {
                 showToast('Error saving voice: ' + e.message, 'error');
             }
@@ -2507,6 +2686,92 @@
                 loadDesignedVoices();
             } catch (e) {
                 showToast('Error deleting voice: ' + e.message, 'error');
+            }
+        };
+
+        window.openDesignedVoiceForEdit = async (voiceId) => {
+            try {
+                const voice = (window._designedVoicesCache || []).find(v => v.id === voiceId);
+                if (!voice) {
+                    showToast('Designed voice not found', 'error');
+                    return;
+                }
+
+                // Switch to Designer tab
+                document.querySelector('[data-tab="designer"]').click();
+
+                // Populate fields
+                document.getElementById('design-voice-name').value = voice.name || '';
+                document.getElementById('design-source-name').value = voice.name || '';
+                document.getElementById('design-description').value = voice.description || '';
+                document.getElementById('design-sample-text').value = voice.sample_text || '';
+
+                // Populate alias dropdown
+                const aliasSelect = document.getElementById('design-alias-select');
+                aliasSelect.innerHTML = '<option value="">-- None --</option>';
+                const names = (window._voicesNames || []).filter(n => n !== voice.name);
+                names.forEach(n => {
+                    const opt = document.createElement('option');
+                    opt.value = n;
+                    opt.text = n;
+                    aliasSelect.appendChild(opt);
+                });
+
+                // Try to read existing alias from voices config
+                try {
+                    const voices = await API.get('/api/voices');
+                    const entry = voices.find(v => v.name === voice.name);
+                    if (entry && entry.config && entry.config.alias_of) {
+                        aliasSelect.value = entry.config.alias_of;
+                    } else {
+                        aliasSelect.value = '';
+                    }
+                } catch (e) {
+                    aliasSelect.value = '';
+                }
+
+                // Update preview audio and current preview file
+                const audio = document.getElementById('design-preview-audio');
+                audio.src = `/designed_voices/${voice.filename}?t=${Date.now()}`;
+                window._currentPreviewFile = voice.filename;
+                window._editingDesignedVoiceId = voice.id;
+                document.getElementById('design-preview-container').style.display = 'block';
+
+                const previewButton = document.getElementById('btn-design-preview');
+                if (previewButton) {
+                    previewButton.innerHTML = '<i class="fas fa-wand-magic-sparkles me-1"></i>Re-design Voice';
+                }
+
+                // Focus description for quick edits
+                document.getElementById('design-description').focus();
+                showToast('Loaded designed voice for editing', 'info');
+            } catch (e) {
+                showToast('Failed to load voice for edit: ' + e.message, 'error');
+            }
+        };
+
+        window.openVoiceDesignEditor = (button) => {
+            const card = button.closest('.card-body');
+            const cardRoot = button.closest('.voice-card');
+            const voiceName = cardRoot ? cardRoot.dataset.voice : '';
+            const description = card ? (card.querySelector('.design-description')?.value || '') : '';
+
+            document.querySelector('[data-tab="designer"]').click();
+            document.getElementById('design-voice-name').value = voiceName;
+            document.getElementById('design-source-name').value = voiceName;
+            document.getElementById('design-description').value = description;
+            window._editingDesignedVoiceId = voiceName || null;
+            window._currentPreviewFile = null;
+            document.getElementById('design-preview-container').style.display = 'none';
+
+            const previewButton = document.getElementById('btn-design-preview');
+            if (previewButton) {
+                previewButton.innerHTML = '<i class="fas fa-wand-magic-sparkles me-1"></i>Re-design Voice';
+            }
+
+            const statusEl = document.getElementById('design-status');
+            if (statusEl) {
+                statusEl.innerHTML = '<span class="text-muted"><i class="fas fa-info me-1"></i>Edit the description, then generate a preview.</span>';
             }
         };
 
