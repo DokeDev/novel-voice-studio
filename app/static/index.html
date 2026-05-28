@@ -76,6 +76,12 @@
                     <li class="nav-item"><a class="nav-link nav-advanced" data-tab="dataset-builder">Dataset</a></li>
                     <li class="nav-item"><a class="nav-link nav-advanced" data-tab="training">Training</a></li>
                 </ul>
+                <ul class="navbar-nav ms-auto align-items-center">
+                    <li class="nav-item text-light small d-flex align-items-center" title="System Status">
+                        <i class="fas fa-microchip me-1 text-secondary"></i><span id="sys-gpu-val" class="me-3" style="font-family: monospace;">N/A</span>
+                        <i class="fas fa-hdd me-1 text-secondary"></i><span id="sys-disk-val" style="font-family: monospace;">N/A</span>
+                    </li>
+                </ul>
             </div>
         </div>
     </nav>
@@ -3709,12 +3715,46 @@
         document.getElementById('dsb-description')?.addEventListener('input', dsbSaveForm);
         document.getElementById('dsb-global-seed')?.addEventListener('input', dsbSaveForm);
 
+        async function updateSystemStats() {
+            try {
+                const stats = await API.get('/api/system/stats');
+                const gpuEl = document.getElementById('sys-gpu-val');
+                const diskEl = document.getElementById('sys-disk-val');
+
+                if (stats.gpu) {
+                    const used = stats.gpu.reserved_gb.toFixed(1);
+                    const total = stats.gpu.total_gb.toFixed(1);
+                    gpuEl.innerText = `${used}/${total} GB`;
+                    if (stats.gpu.allocated_percent > 90) {
+                        gpuEl.parentElement.classList.add('text-danger');
+                        gpuEl.parentElement.classList.remove('text-light');
+                    } else {
+                        gpuEl.parentElement.classList.remove('text-danger');
+                        gpuEl.parentElement.classList.add('text-light');
+                    }
+                } else {
+                    gpuEl.innerText = 'N/A';
+                }
+
+                diskEl.innerText = `${stats.disk.free_gb} GB`;
+                if (stats.disk.low_space) {
+                    diskEl.parentElement.classList.add('text-danger');
+                    diskEl.parentElement.classList.remove('text-light');
+                } else {
+                    diskEl.parentElement.classList.remove('text-danger');
+                    diskEl.parentElement.classList.add('text-light');
+                }
+            } catch (e) { console.error('Failed to update system stats', e); }
+        }
+
         // Init
         loadConfig();
         loadVoices();
         loadSavedScripts();
         loadDesignedVoices();
         dsbLoadProjects();
+        updateSystemStats();
+        setInterval(updateSystemStats, 10000); // Update every 10s
     </script>
 </body>
 </html>
