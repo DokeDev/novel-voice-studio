@@ -271,6 +271,10 @@ Conda 自带的 ffmpeg 在 Windows 上通常缺少 MP3 编码器（libmp3lame）
 - [English README](README.md) — 完整英文文档，包含 API 参考和项目结构
 - [Wiki](https://github.com/Finrandojin/alexandria-audiobook/wiki) — 详细指南：声音类型、LoRA 训练、批量生成等
 
+## 致谢
+
+- [Ayush Naphade](https://github.com/aayushnaphade) — 角色生成、说话人别名解析和上下文脚本审校功能（[PR #42](https://github.com/Finrandojin/alexandria-audiobook/pull/42)）。欢迎访问他的项目 [Lily](https://lily.rayoneai.in/)！
+
 ## 许可证
 
 MIT

@@ -922,6 +922,10 @@ Alexandria/
 └── README.md
 ```
 
+## Acknowledgements
+
+- [Ayush Naphade](https://github.com/aayushnaphade) — Persona generation, speaker alias resolution, and contextual script review ([PR #42](https://github.com/Finrandojin/alexandria-audiobook/pull/42)). Check out his project [Lily](https://lily.rayoneai.in/) — looking forward to seeing where it goes!
+
 ## License
 
 MIT
