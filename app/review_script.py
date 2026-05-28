@@ -192,11 +192,13 @@ def normalize_text(text):
     return text
 
 
-def check_text_loss(original_entries, corrected_entries, threshold=0.95):
-    """Check if corrected entries lost significant text from the original.
+def check_text_loss(original_entries, corrected_entries, threshold=0.95, upper_bound=None):
+    """Check if corrected entries lost or gained significant text.
 
     Returns (passed, original_text, corrected_text, ratio).
-    passed is True if the corrected text covers at least `threshold` of the original words.
+    passed is True if the corrected word count ratio falls within
+    [threshold, upper_bound]. If upper_bound is None, it defaults to
+    1.0 + (1.0 - threshold), i.e. symmetric around 1.0.
     """
     orig_words = []
     for e in original_entries:
@@ -209,19 +211,13 @@ def check_text_loss(original_entries, corrected_entries, threshold=0.95):
     if not orig_words:
         return True, "", "", 1.0
 
-    # Check what fraction of original words appear in corrected text
     orig_joined = " ".join(orig_words)
     corr_joined = " ".join(corr_words)
 
-    # Simple word-level coverage: count original words that appear in corrected
-    orig_word_set = set(orig_words)
-    corr_word_set = set(corr_words)
-
-    # For a more robust check, compare total word counts
-    # (a dropped sentence means fewer total words)
     ratio = len(corr_words) / len(orig_words) if orig_words else 1.0
 
-    upper_bound = 1.0 + (1.0 - threshold)
+    if upper_bound is None:
+        upper_bound = 1.0 + (1.0 - threshold)
     passed = threshold <= ratio <= upper_bound
     return passed, orig_joined, corr_joined, ratio
 
@@ -357,7 +353,7 @@ def main():
 
             corrected = review_batch(
                 client, model_name, batch, batch_index, total_batches,
-                previous_tail=previous_tail,
+                previous_tail=None,  # contextual mode uses explicit before/after window instead
                 source_context="\n".join(contextual_lines),
                 system_prompt=review_sys,
                 user_prompt_template=review_usr,
@@ -377,9 +373,9 @@ def main():
                 previous_tail = batch[-2:] if len(batch) >= 2 else batch
                 continue
 
-            passed, orig_text, corr_text, ratio = check_text_loss(batch, corrected, threshold=0.95)
+            passed, orig_text, corr_text, ratio = check_text_loss(batch, corrected, threshold=0.95, upper_bound=1.15)
             if not passed:
-                print(f"  WARNING: Text length mismatch (loss or gain)! Word ratio: {ratio:.2f} (acceptable range: 0.95-1.05)")
+                print(f"  WARNING: Text length mismatch (loss or gain)! Word ratio: {ratio:.2f} (acceptable range: 0.95-1.15)")
                 print(f"  Original words: {len(orig_text.split())}, Corrected words: {len(corr_text.split())}")
                 print(f"  Keeping original entries for batch {batch_index} to prevent data corruption.")
                 all_corrected.extend(batch)

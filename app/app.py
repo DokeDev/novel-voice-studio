@@ -17,6 +17,7 @@ import zipfile
 import subprocess
 import tempfile
 import aiofiles
+from utils import atomic_json_write
 from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
 from math import ceil
@@ -315,19 +316,8 @@ def run_process(command: List[str], task_name: str):
 
 
 def _atomic_json_write(data, target_path):
-    """Write JSON atomically to avoid partial files on crashes."""
-    directory = os.path.dirname(target_path) or "."
-    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", suffix=".json", dir=directory)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, target_path)
-    finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+    """Write JSON atomically. Delegates to shared utility."""
+    atomic_json_write(data, target_path)
 
 # Endpoints
 
@@ -694,7 +684,7 @@ async def get_voices():
         except (json.JSONDecodeError, ValueError):
             voice_config = {}
 
-    missing_speakers = {voice_name for voice_name in voices_list if not voice_config.get(voice_name)}
+    missing_speakers = {voice_name for voice_name in voices_list if voice_name not in voice_config}
 
     result = []
     for voice_name in voices_list:
@@ -729,6 +719,13 @@ async def generate_personas(background_tasks: BackgroundTasks, request: Generate
         raise HTTPException(status_code=400, detail="Persona generation already running")
 
     process_state["persona"]["cancel"] = False
+
+    # Unload TTS engine to free GPU for the subprocess
+    if project_manager.engine is not None:
+        logger.info("Unloading TTS engine for persona generation...")
+        project_manager.engine = None
+        gc.collect()
+
     command = [sys.executable, "-u", "generate_personas.py"]
     if request.advanced:
         batch_size = max(1, min(int(request.batch_size or 40), 200))
@@ -1034,7 +1031,7 @@ async def generate_batch_fast_endpoint(request: BatchGenerateRequest, background
                 seed_val = tts_cfg.get("batch_seed")
                 if seed_val is not None and seed_val != "":
                     batch_seed = int(seed_val)
-                batch_size = max(1, tts_cfg.get("batch_size", 4))
+                batch_size = max(1, tts_cfg.get("parallel_workers", 4))
                 batch_group_by_type = tts_cfg.get("batch_group_by_type", False)
         except (json.JSONDecodeError, ValueError):
             pass

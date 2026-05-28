@@ -9,6 +9,7 @@ import tempfile
 from openai import OpenAI
 
 from tts import TTSEngine, sanitize_filename
+from utils import atomic_json_write as _atomic_json_write
 
 
 def extract_json_object(text):
@@ -214,7 +215,7 @@ def _resolve_aliases_batch(client, model_name, speakers_info, existing_names):
                 {"role": "user", "content": prompt}
             ],
             temperature=0.1,
-            max_tokens=1500,
+            max_tokens=max(1500, len(speakers_info) * 80),
         )
         result = extract_json_object(response.choices[0].message.content.strip())
         if isinstance(result, dict):
@@ -538,9 +539,10 @@ def run_advanced_persona_generation(script, selected_speakers, samples, voice_co
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.2,
-                max_tokens=1200,
+                max_tokens=4000,
             )
-            parsed = extract_json_object(response.choices[0].message.content.strip())
+            raw_content = response.choices[0].message.content.strip()
+            parsed = extract_json_object(raw_content)
             characters = []
             if isinstance(parsed, dict):
                 if "characters" in parsed and isinstance(parsed["characters"], list):
@@ -552,6 +554,7 @@ def run_advanced_persona_generation(script, selected_speakers, samples, voice_co
                             characters.append(val)
             if not characters:
                 print(f"Warning: discovery batch {batch_number} returned no parseable characters; using speaker fallback.")
+                print(f"  LLM response (first 500 chars): {raw_content[:500]}")
                 characters = _fallback_batch_characters(batch)
         except Exception as e:
             print(f"Warning: discovery batch {batch_number} failed: {e}; using speaker fallback.")
@@ -616,19 +619,7 @@ def run_advanced_persona_generation(script, selected_speakers, samples, voice_co
         time.sleep(0.5)
 
 
-def _atomic_json_write(data, target_path):
-    directory = os.path.dirname(target_path) or "."
-    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", suffix=".json", dir=directory)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, target_path)
-    finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+# _atomic_json_write imported from utils
 
 
 def main():
@@ -694,7 +685,12 @@ def main():
         except Exception:
             voice_config = {}
 
-    engine = TTSEngine({"tts": config.get("tts", {})})
+    # Disable compile_codec for persona previews: compilation overhead
+    # outweighs benefit for single generations, and subprocess context
+    # can trigger HIP kernel errors on ROCm.
+    tts_cfg = dict(config.get("tts", {}))
+    tts_cfg["compile_codec"] = False
+    engine = TTSEngine({"tts": tts_cfg})
 
     selected_speakers = list(samples.keys())
     if args.new_only:

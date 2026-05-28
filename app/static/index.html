@@ -2544,6 +2544,8 @@
                 loadSavedScripts();
                 loadChunks();
                 loadVoices();
+                resetDesignerForm();
+                loadDesignedVoices();
             } catch (e) {
                 showToast('Error loading script: ' + e.message, 'error');
             }
@@ -2602,6 +2604,22 @@
             }
         }
 
+        function resetDesignerForm() {
+            document.getElementById('design-voice-name').value = '';
+            document.getElementById('design-source-name').value = '';
+            document.getElementById('design-description').value = '';
+            document.getElementById('design-sample-text').value = '';
+            document.getElementById('design-alias-select').innerHTML = '<option value="">-- None --</option>';
+            document.getElementById('design-preview-container').style.display = 'none';
+            document.getElementById('design-status').innerHTML = '';
+            window._editingDesignedVoiceId = null;
+            window._currentPreviewFile = null;
+            const previewButton = document.getElementById('btn-design-preview');
+            if (previewButton) {
+                previewButton.innerHTML = '<i class="fas fa-wand-magic-sparkles me-1"></i>Generate Preview';
+            }
+        }
+
         window.generateDesignPreview = async () => {
             const description = document.getElementById('design-description').value.trim();
             const sampleText = document.getElementById('design-sample-text').value.trim();
@@ -2653,6 +2671,7 @@
                     preview_file: window._currentPreviewFile
                 });
                 document.getElementById('design-voice-name').value = '';
+                window._editingDesignedVoiceId = null;
                 loadDesignedVoices();
                 // If we're editing a generated persona, propagate alias choice to voice card and trigger save
                 const source = document.getElementById('design-source-name').value;

@@ -7,6 +7,8 @@ import zipfile
 import io
 import re
 import time
+import logging
+from utils import atomic_json_write
 from tts import (
     TTSEngine,
     combine_audio_with_pauses,
@@ -84,6 +86,8 @@ def group_into_chunks(script_entries, max_chars=MAX_CHUNK_CHARS):
     chunks.append(_make_chunk(current_speaker, current_text, current_instruct, current_pause_after))
 
     return chunks
+
+logger = logging.getLogger(__name__)
 
 class ProjectManager:
     def __init__(self, root_dir):
@@ -171,6 +175,7 @@ class ProjectManager:
         seen = set()
         for _ in range(8):
             if name in seen:
+                logger.warning(f"Alias cycle detected for speaker '{speaker}': chain visited {seen}")
                 break
             seen.add(name)
             entry = voice_config.get(name, {})
@@ -185,23 +190,8 @@ class ProjectManager:
         return name
 
     def _atomic_json_write(self, data, target_path, max_retries=5):
-        """Atomically write JSON data with retry logic for Windows file locking."""
-        tmp_path = target_path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-        for attempt in range(max_retries):
-            try:
-                os.replace(tmp_path, target_path)
-                return
-            except OSError as e:
-                if attempt < max_retries - 1 and (
-                    e.errno == 5 or "Access is denied" in str(e) or "being used by another process" in str(e)
-                ):
-                    delay = 0.05 * (2 ** attempt)
-                    time.sleep(delay)
-                    continue
-                raise
+        """Atomically write JSON data. Delegates to shared utility."""
+        atomic_json_write(data, target_path, max_retries=max_retries)
 
     def save_chunks(self, chunks):
         with self._chunks_lock:
