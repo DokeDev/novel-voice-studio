@@ -79,3 +79,5 @@ preparer_output/
 # Docker persistent data
 data/
 
+# Local model mount (weights belong on the GPU host, never in Git)
+models/

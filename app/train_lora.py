@@ -33,8 +33,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="LoRA fine-tuning for Qwen3-TTS Base model")
     parser.add_argument("--data_dir", required=True, help="Directory containing metadata.jsonl and audio files")
     parser.add_argument("--output_dir", required=True, help="Directory to save the LoRA adapter")
-    parser.add_argument("--model_name", default="Qwen/Qwen3-TTS-12Hz-1.7B-Base",
-                        help="Base model name or path")
+    parser.add_argument("--model_name", required=True,
+                        help="Installed local Base model directory")
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
     parser.add_argument("--lr", type=float, default=5e-6, help="Learning rate")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size (samples per step)")
@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8,
                         help="Gradient accumulation steps")
     parser.add_argument("--device", default="auto", help="Device: auto, cuda, cpu")
-    parser.add_argument("--language", default="english",
+    parser.add_argument("--language", default="chinese",
                         help="Language for codec prefix token (english, chinese, korean, japanese, etc.)")
     parser.add_argument("--max_audio_seconds", type=float, default=30.0,
                         help="Maximum audio duration in seconds (longer clips are skipped)")
@@ -195,7 +195,7 @@ def load_dataset(data_dir, hf_model, processor, device, dtype, max_audio_seconds
 
 # ── Input construction ──────────────────────────────────────────────────
 
-def build_teacher_forcing_input(sample, hf_model, device, dtype, language="english"):
+def build_teacher_forcing_input(sample, hf_model, device, dtype, language="chinese"):
     """Build the full teacher-forcing input sequence for one training sample.
 
     Replicates the generate() method's input construction but includes
@@ -360,6 +360,9 @@ def train(args):
     print(f"[TRAIN] Device: {device}, dtype: {dtype}", flush=True)
     print(f"[TRAIN] Config: epochs={args.epochs}, lr={args.lr}, lora_r={args.lora_r}, "
           f"lora_alpha={args.lora_alpha}, grad_accum={args.gradient_accumulation_steps}", flush=True)
+
+    if not os.path.isdir(args.model_name):
+        raise RuntimeError(f"Base model must be an installed local directory: {args.model_name}")
 
     # ── Load model ──
     print("[TRAIN] Loading Base model...", flush=True)

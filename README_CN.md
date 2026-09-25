@@ -8,8 +8,6 @@
 
 利用 AI 驱动的脚本标注和文本转语音技术，将任何书籍或小说转化为全配音有声书。内置 Qwen3-TTS 引擎，支持批量处理，并提供浏览器端编辑器，可逐行精调后导出。
 
-## 示例音频：[sample.mp3](https://github.com/user-attachments/files/25276110/sample.mp3)
-
 ## 截图
 
 <img src="https://github.com/user-attachments/assets/874b5e30-56d2-4292-b754-4408fc53f5d6" width="30%"></img> <img src="https://github.com/user-attachments/assets/488cde02-6b93-47fa-874b-97a618ae482c" width="30%"></img> <img src="https://github.com/user-attachments/assets/4c0805a6-bb9d-42c1-a9ff-79bb29d0613c" width="30%"></img> <img src="https://github.com/user-attachments/assets/8e58a5bf-ed8f-4864-8545-1e3d9681b0cf" width="30%"></img> <img src="https://github.com/user-attachments/assets/531830da-8668-4189-a0dc-020e6661bfb6" width="30%"></img>
@@ -32,7 +30,7 @@
 - **声音克隆** — 仅需 5-15 秒参考音频即可克隆任何声音
 - **声音设计器** — 通过文字描述创建新声音（例如："温暖、低沉的男性声音，语调沉稳"）
 - **LoRA 声音训练** — 在自定义语音数据集上微调 Base 模型，创建持久的声音身份
-- **内置 LoRA 预设** — 开箱即用的预训练声音适配器
+- **可选 LoRA 适配器** — 管理员可将审核后的语音适配器放入挂载数据目录
 - **数据集构建器** — 交互式工具，逐条创建训练数据集，支持预览
 - **批量处理** — 同时生成数十个语音块，吞吐量达实时速度的 3-6 倍
 - **编解码器编译** — 可选的 `torch.compile` 优化，批量解码速度提升 3-4 倍
@@ -49,6 +47,7 @@
 - **单独语音行** — 每行单独导出 MP3，方便在 DAW 中编辑
 - **Audacity 导出** — 一键导出 ZIP，包含按说话人分轨的 WAV 文件、LOF 项目文件和标签
 - **M4B 有声书** — 带章节标记的 M4B 格式（AAC），支持自动检测章节或逐块章节，适用于 Audiobookshelf、Apple Books、VLC 等播放器
+- **对象存储发布** — 将完成的 MP3/M4B 与播放清单上传到任意 S3 兼容服务
 
 ---
 
@@ -76,7 +75,7 @@
 | **AMD** | Windows | 仅 CPU | 不适用 | 不支持 GPU 加速 — 如需 AMD GPU 加速请使用 Linux |
 | **Apple Silicon** | macOS | 仅 CPU | 不适用 | 暂不支持 MPS 加速，可运行但速度较慢 |
 
-> **提示：** 无需外部 TTS 服务器。Alexandria 内置 Qwen3-TTS 引擎，模型权重在首次使用时自动从 Hugging Face 下载（每个模型变体约 3.5 GB）。
+> **提示：** 无需外部 TTS 服务器。模型权重不会放入仓库或 Docker 镜像；请在 GPU 主机的 **Models** 页面安装，或手动复制到挂载目录。
 
 ---
 
@@ -90,13 +89,17 @@
 3. 点击 **Install** 安装依赖
 4. 点击 **Start** 启动 Web 界面
 
-### 方式 B：Google Colab（无需安装）
+### 方式 B：Docker（NVIDIA GPU）
 
-没有 GPU 或系统不兼容？在浏览器中使用免费 T4 GPU 运行 Alexandria：
+用于 GPU 云或自有 NVIDIA GPU 服务器：
 
-[![在 Colab 中打开](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Finrandojin/alexandria-audiobook/blob/main/alexandria_colab.ipynb)
+```bash
+docker compose up --build -d
+```
 
-需要免费的 [ngrok 账号](https://dashboard.ngrok.com/signup) 用于 Web UI 隧道。详细说明请参阅 notebook。
+需要 Docker、Docker Compose 和 NVIDIA Container Toolkit。Web UI 默认监听 `4200` 端口；模型存放在 GPU 主机的 `data/models`，不会写入镜像。部署细节见 [GPU_DEPLOYMENT.md](GPU_DEPLOYMENT.md)。
+
+使用 RunPod 自定义镜像和 Network Volume 时，请直接参考 [RUNPOD_DEPLOYMENT.md](RUNPOD_DEPLOYMENT.md)。
 
 ---
 
@@ -116,19 +119,17 @@ Alexandria **不包含** LLM — 它通过 API 连接到外部 LLM。在生成�
 
 如果在点击"Generate Script"时 LLM 服务器未运行，生成将会失败。请查看 Pinokio 终端获取错误详情。
 
-### 2. 首次 TTS 生成会下载约 3.5 GB 模型
+### 2. 在 GPU 主机安装 TTS 模型
 
-TTS 模型**不包含在安装中**，首次生成音频时会自动从 Hugging Face 下载：
+TTS 模型**不包含在安装中**，默认也不会在生成时静默下载：
 
 - **每个模型变体约 3.5 GB**（CustomVoice、Base/克隆、VoiceDesign）
-- 只有你使用的变体才会下载（大多数用户从 CustomVoice 开始）
-- 下载在后台进行 — **请在 Pinokio 终端中查看进度**
-- 此时 Web UI 可能看起来没有响应，这是正常的 — 它在等待下载完成
-- 首次下载后，模型将缓存在本地，后续加载只需几秒钟
+- 启动容器后打开 **Models** 页面
+- 管理员可点击下载按钮，或把模型复制到页面显示的准确路径
+- 手动复制后点击 **Scan** 重新扫描
+- 仅在允许 GPU 主机自行访问 Hugging Face 时开启“自动下载缺失模型”
 
-> **提示：** 如果下载似乎卡住了，请检查网络连接。如果失败，重启应用再试 — 会从断点处继续下载。
-
-> **中国大陆用户：** 如果 Hugging Face 下载缓慢或无法连接，请在启动前设置镜像：将环境变量 `HF_ENDPOINT` 设为 `https://hf-mirror.com`。也可以在 start.js 的 `env` 字段中添加：`env: { HF_ENDPOINT: "https://hf-mirror.com" }`。如果遇到速率限制，可注册免费的 [Hugging Face 账号](https://huggingface.co/join) 并设置 `HF_TOKEN` 为你的访问令牌。
+> **提示：** 需要受限仓库时，通过容器环境变量传入 `HF_TOKEN`，不要把令牌写入 Git。
 
 ### 3. 首批生成需要额外预热时间
 
@@ -218,10 +219,10 @@ Web UI 显示的是高层状态，**详细日志在 Pinokio 终端中**：
 - 思维链模型（DeepSeek-R1、GLM4 等）可能干扰 JSON 输出。如需使用，请在设置中的 **Banned Tokens** 字段添加 `<think>` 以禁用思考模式
 
 ### 模型下载失败或速度很慢
-- TTS 模型（每个约 3.5 GB）在首次使用时从 Hugging Face 下载
+- 在 **Models** 页面由管理员发起下载；默认策略下，生成任务不会静默下载缺失模型
 - **中国大陆用户**：设置环境变量 `HF_ENDPOINT=https://hf-mirror.com` 使用国内镜像
 - 如遇速率限制，注册免费 [Hugging Face 账号](https://huggingface.co/join) 并设置 `HF_TOKEN`
-- 下载中断后会自动续传 — 重启应用即可
+- 下载失败时按错误提示清理不完整目录后重试；已完成模型会保留在 `data/models`
 
 ### TTS 生成失败
 - 查看 Pinokio 终端中的模型加载错误

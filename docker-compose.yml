@@ -6,9 +6,21 @@ services:
     environment:
       # Store WebUI settings on a mounted volume so they survive container restarts
       - ALEXANDRIA_CONFIG_PATH=/alexandria/config/config.json
+      - ALEXANDRIA_MODELS_DIR=/alexandria/models
+      - ALEXANDRIA_OUTPUT_DIR=/alexandria/final
+      - ALEXANDRIA_ENABLE_BUILTIN_LORA=false
+      - HF_HOME=/alexandria/cache/huggingface
+      - ALEXANDRIA_S3_ENDPOINT=${ALEXANDRIA_S3_ENDPOINT:-}
+      - ALEXANDRIA_S3_REGION=${ALEXANDRIA_S3_REGION:-}
+      - ALEXANDRIA_S3_BUCKET=${ALEXANDRIA_S3_BUCKET:-}
+      - ALEXANDRIA_S3_ACCESS_KEY_ID=${ALEXANDRIA_S3_ACCESS_KEY_ID:-}
+      - ALEXANDRIA_S3_SECRET_ACCESS_KEY=${ALEXANDRIA_S3_SECRET_ACCESS_KEY:-}
+      - ALEXANDRIA_S3_PUBLIC_BASE_URL=${ALEXANDRIA_S3_PUBLIC_BASE_URL:-}
+      - ALEXANDRIA_S3_PREFIX=${ALEXANDRIA_S3_PREFIX:-audiobooks}
     volumes:
-      # Persist HuggingFace model cache (~3.5 GB per model, downloaded on first use)
-      - hf_cache:/root/.cache/huggingface
+      # Models stay outside the image and can be populated on the GPU host.
+      - ./data/models:/alexandria/models
+      - ./data/cache:/alexandria/cache
       # Persist user data
       - ./data/uploads:/alexandria/app/uploads
       - ./data/designed_voices:/alexandria/designed_voices
@@ -21,6 +33,7 @@ services:
       - ./data/config:/alexandria/config
       # Persist audiobook output
       - ./data/output:/alexandria/voicelines
+      - ./data/final:/alexandria/final
     deploy:
       resources:
         reservations:
@@ -28,6 +41,3 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-
-volumes:
-  hf_cache:

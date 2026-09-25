@@ -30,7 +30,6 @@ ENVIRONMENT
 *.md
 !default_prompts.txt
 !review_prompts.txt
-alexandria_colab.ipynb
 install.js
 start.js
 reset.js

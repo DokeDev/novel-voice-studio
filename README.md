@@ -8,9 +8,6 @@ English | [中文](README_CN.md)
 
 Transform any book or novel into a fully-voiced audiobook using AI-powered script annotation and text-to-speech. Features a built-in Qwen3-TTS engine with batch processing and a browser-based editor for fine-tuning every line before final export.
 
-## Example: [sample.mp3](https://github.com/user-attachments/files/25276110/sample.mp3)
-
-
 ## Screenshots
 
 <img src="https://github.com/user-attachments/assets/874b5e30-56d2-4292-b754-4408fc53f5d6" width="30%"></img> <img src="https://github.com/user-attachments/assets/488cde02-6b93-47fa-874b-97a618ae482c" width="30%"></img> <img src="https://github.com/user-attachments/assets/4c0805a6-bb9d-42c1-a9ff-79bb29d0613c" width="30%"></img> <img src="https://github.com/user-attachments/assets/8e58a5bf-ed8f-4864-8545-1e3d9681b0cf" width="30%"></img> <img src="https://github.com/user-attachments/assets/531830da-8668-4189-a0dc-020e6661bfb6" width="30%"></img> 
@@ -34,7 +31,7 @@ Transform any book or novel into a fully-voiced audiobook using AI-powered scrip
 - **Voice Cloning** - Clone any voice from a 5-15 second reference audio sample
 - **Voice Designer** - Create new voices from text descriptions (e.g. "A warm, deep male voice with a calm and steady tone")
 - **LoRA Voice Training** - Fine-tune the Base model on custom voice datasets to create persistent voice identities with instruct-following
-- **Built-in LoRA Presets** - Pre-trained voice adapters included out of the box, ready to assign to characters
+- **Optional LoRA Adapters** - Administrators can add approved voice adapters to the mounted data directory
 - **Dataset Builder** - Interactive tool for creating LoRA training datasets with per-sample text, emotion, and audio preview
 - **Batch Processing** - Generate dozens of chunks simultaneously with 3-6x real-time throughput
 - **Codec Compilation** - Optional `torch.compile` optimization for 3-4x faster batch decoding
@@ -55,6 +52,7 @@ Transform any book or novel into a fully-voiced audiobook using AI-powered scrip
 - **Individual Voicelines** - Separate MP3 per line for DAW editing (Audacity, etc.)
 - **Audacity Export** - One-click zip with per-speaker WAV tracks, LOF project file, and labels for automatic multi-track import into Audacity
 - **M4B Audiobook** - Chaptered M4B (AAC) with per-chunk or auto-detected chapter markers for audiobook players (Audiobookshelf, Apple Books, VLC, etc.)
+- **Object Storage Publish** - Upload finished MP3/M4B files and a playback manifest to any S3-compatible provider
 
 ## Requirements
 
@@ -81,7 +79,7 @@ Transform any book or novel into a fully-voiced audiobook using AI-powered scrip
 | **Apple Silicon** | macOS | CPU only | N/A | MPS acceleration is not currently supported. Functional but slow |
 | **Intel** | macOS | CPU only | N/A | |
 
-> **Note:** No external TTS server is required. Alexandria includes a built-in Qwen3-TTS engine that loads models directly. Model weights are downloaded automatically on first use (~3.5 GB per model variant).
+> **Note:** No external TTS server is required. Model weights are intentionally excluded from this repository and its Docker image. Install them from the **Models** tab on the GPU host, or copy them into the mounted model directory.
 
 > **Documentation:** For in-depth guidance on voice types, LoRA training, batch generation, and more, see the [Wiki](https://github.com/Finrandojin/alexandria-audiobook/wiki).
 
@@ -95,15 +93,7 @@ Transform any book or novel into a fully-voiced audiobook using AI-powered scrip
 3. Click **Install** to set up dependencies
 4. Click **Start** to launch the web interface
 
-### Option B: Google Colab (No Install Required)
-
-No GPU or wrong OS? Run Alexandria on a free T4 GPU in your browser:
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Finrandojin/alexandria-audiobook/blob/main/alexandria_colab.ipynb)
-
-Requires a free [ngrok account](https://dashboard.ngrok.com/signup) for the web UI tunnel. See the notebook for full instructions.
-
-### Option C: Docker (NVIDIA GPU)
+### Option B: Docker (NVIDIA GPU)
 
 For integration into automated pipelines or server deployments:
 
@@ -113,7 +103,7 @@ cd alexandria-audiobook
 docker compose up --build
 ```
 
-Requires [Docker](https://docs.docker.com/get-docker/) with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). The web UI is available at `http://localhost:4200`. TTS models download on first use and are cached in a Docker volume. User data (uploads, voice configs, trained LoRA adapters, audio output) persists via bind mounts to the project directory.
+Requires [Docker](https://docs.docker.com/get-docker/) with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). The web UI is available at `http://localhost:4200`. Model weights live in `data/models` on the GPU host and are never baked into the image. User data persists through bind mounts under `data/`.
 
 ## First Launch — What to Expect
 
@@ -131,17 +121,17 @@ Alexandria does **not** include an LLM — it connects to one over an API. Befor
 
 If the LLM server isn't running when you click "Generate Script", the generation will fail. Check the Pinokio terminal for error details.
 
-### 2. First TTS Generation Downloads ~3.5 GB
+### 2. Install TTS Models on the GPU Host
 
-The TTS models are **not** included in the install. They download automatically from Hugging Face the first time you generate audio. This is normal:
+The TTS models are **not** included in the install and automatic download is disabled by default:
 
 - **Each model variant is ~3.5 GB** (CustomVoice, Base/Clone, VoiceDesign)
-- Only the variant you use gets downloaded (most users start with CustomVoice)
-- Downloads happen in the background — **check the Pinokio terminal** for progress
-- The web UI may appear frozen during this time. It is not — it's waiting for the download to finish
-- After the first download, models are cached locally and load in seconds
+- Open the **Models** tab after starting the container
+- Use **Download** for an approved model, or copy files into the exact displayed path
+- Use **Scan** after a manual copy
+- Keep **Download missing models automatically** off unless the GPU host should fetch missing weights on demand
 
-> **Tip:** If the download seems stuck, check your internet connection. If it fails, restart the app and try again — it will resume from where it left off.
+See [GPU_DEPLOYMENT.md](GPU_DEPLOYMENT.md) for the volume layout and deployment checklist.
 
 ### 3. First Batch Has Extra Warmup Time
 
@@ -306,7 +296,7 @@ Create new voices from text descriptions without needing reference audio.
 - Uses the Qwen3-TTS VoiceDesign model to synthesize voice characteristics from descriptions
 
 ### Training Tab
-Train LoRA adapters on the Base model to create custom voice identities. Several built-in LoRA presets are included out of the box and appear alongside your trained adapters.
+Train LoRA adapters on the Base model to create custom voice identities. Administrators may also install approved adapters into the mounted LoRA directory.
 
 **Dataset:**
 - **Upload ZIP** — WAV files (24kHz mono) + `metadata.jsonl` with `audio_filepath` and `text` fields
@@ -843,12 +833,12 @@ For script generation, non-thinking models work best:
 - Try a different model - some struggle with JSON output
 
 ### Model download fails or is very slow
-- TTS models (~3.5 GB each) are downloaded from Hugging Face on first use
+- Open **Models** and start an administrator download; generation never silently downloads a missing model while the default policy is active
 - If downloads are slow or fail due to network restrictions (common in mainland China), set a Hugging Face mirror before launching:
   - Set the environment variable `HF_ENDPOINT=https://hf-mirror.com` before starting the app
   - Or in Pinokio, add it to start.js `env` field: `env: { HF_ENDPOINT: "https://hf-mirror.com" }`
 - If you hit rate limits, create a free [Hugging Face account](https://huggingface.co/join) and set `HF_TOKEN` to your access token
-- Downloads resume automatically if interrupted — just restart the app
+- If a download fails, remove the incomplete directory shown in the error before retrying; completed models remain in `data/models`
 
 ### TTS generation fails
 - Check the Pinokio terminal for model loading errors

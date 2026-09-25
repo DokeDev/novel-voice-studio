@@ -3,9 +3,11 @@ import re
 import json
 import threading
 import shutil
+from pathlib import Path
 import numpy as np
 import soundfile as sf
 from pydub import AudioSegment
+from model_manager import ModelManager
 
 DEFAULT_PAUSE_MS = 500  # Pause between different speakers
 SAME_SPEAKER_PAUSE_MS = 250  # Shorter pause for same speaker continuing
@@ -101,6 +103,11 @@ class TTSEngine:
         self._url = tts_config.get("url", "http://127.0.0.1:7860")
         self._device = tts_config.get("device", "auto")
         self._compile_codec_enabled = tts_config.get("compile_codec", False)
+        self._model_manager = ModelManager(
+            os.environ.get("ALEXANDRIA_MODELS_DIR") or tts_config.get("model_root"),
+            auto_download=tts_config.get("auto_download_models", False),
+        )
+        self._model_paths = tts_config.get("model_paths") or {}
 
         # Language setting (passed to Qwen3-TTS)
         self._language = tts_config.get("language", "English")
@@ -446,43 +453,27 @@ class TTSEngine:
             print(f"Codec compilation skipped (non-fatal): {e}")
 
     @staticmethod
-    def _resolve_local_model_path(model_id):
-        """Check if a HuggingFace model is cached locally and return its snapshot path.
-
-        Uses try_to_load_from_cache to find the local snapshot directory.
-        Returns the local path string if cached, or None if not cached.
-        """
-        from huggingface_hub import try_to_load_from_cache
-        result = try_to_load_from_cache(model_id, "config.json")
-        if isinstance(result, str):
-            # result is the full path to config.json inside the snapshot dir
-            return os.path.dirname(result)
-        return None
-
-    @staticmethod
     def _load_model(model_cls, model_id, load_kwargs):
-        """Load a model, preferring local cache to avoid network issues.
+        """Load an installed local model without an implicit network fallback."""
+        if not os.path.isdir(model_id):
+            raise RuntimeError(
+                f"Model source must be an installed local directory, got: {model_id}"
+            )
+        print(f"  Loading from configured model directory: {model_id}")
+        return model_cls.from_pretrained(model_id, **load_kwargs)
 
-        Checks if the model snapshot exists in the HF cache and loads from
-        the local directory path directly, bypassing all HF Hub network calls.
-        Falls back to normal download on first install when cache is empty.
-        If loading from local cache fails (e.g. incomplete snapshot), retries
-        with the model ID so HF Hub can download any missing files.
-        """
-        local_path = TTSEngine._resolve_local_model_path(model_id)
-        if local_path:
-            print(f"  Loading from local cache: {local_path}")
-            try:
-                return model_cls.from_pretrained(local_path, **load_kwargs)
-            except Exception as e:
-                import traceback
-                print(f"  Warning: Failed to load from local cache: {e}")
-                traceback.print_exc()
-                print(f"  Retrying with model ID (may download missing files)...")
-                return model_cls.from_pretrained(model_id, **load_kwargs)
-        else:
-            print(f"  Model not cached locally, downloading {model_id}...")
-            return model_cls.from_pretrained(model_id, **load_kwargs)
+    def _model_source(self, model_key):
+        """Resolve an explicitly configured path or an installed registry model."""
+        configured = self._model_paths.get(model_key)
+        if configured:
+            path = Path(configured).expanduser()
+            if not path.is_absolute():
+                path = self._model_manager.root_dir / path
+            path = path.resolve()
+            if not self._model_manager.is_valid_model_dir(path):
+                raise RuntimeError(f"Configured model directory is incomplete: {path}")
+            return str(path)
+        return self._model_manager.resolve(model_key)
 
     def _init_local_custom(self):
         """Load Qwen3-TTS CustomVoice model on demand."""
@@ -506,7 +497,7 @@ class TTSEngine:
             if device != "cpu":
                 load_kwargs["device_map"] = device
             self._local_custom_model = self._load_model(
-                Qwen3TTSModel, "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", load_kwargs,
+                Qwen3TTSModel, self._model_source("qwen3_tts_custom_voice"), load_kwargs,
             )
             if self._compile_codec_enabled:
                 self._compile_codec(self._local_custom_model)
@@ -535,7 +526,7 @@ class TTSEngine:
             if device != "cpu":
                 load_kwargs["device_map"] = device
             self._local_clone_model = self._load_model(
-                Qwen3TTSModel, "Qwen/Qwen3-TTS-12Hz-1.7B-Base", load_kwargs,
+                Qwen3TTSModel, self._model_source("qwen3_tts_base"), load_kwargs,
             )
             if self._compile_codec_enabled:
                 self._compile_codec(self._local_clone_model)
@@ -564,7 +555,7 @@ class TTSEngine:
             if device != "cpu":
                 load_kwargs["device_map"] = device
             self._local_design_model = self._load_model(
-                Qwen3TTSModel, "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign", load_kwargs,
+                Qwen3TTSModel, self._model_source("qwen3_tts_voice_design"), load_kwargs,
             )
             if self._compile_codec_enabled:
                 self._compile_codec(self._local_design_model)
@@ -608,7 +599,7 @@ class TTSEngine:
                 load_kwargs["device_map"] = device
 
             model = self._load_model(
-                Qwen3TTSModel, "Qwen/Qwen3-TTS-12Hz-1.7B-Base", load_kwargs,
+                Qwen3TTSModel, self._model_source("qwen3_tts_base"), load_kwargs,
             )
 
             # Wrap the talker with the LoRA adapter
@@ -845,20 +836,8 @@ class TTSEngine:
                 adapter_path = os.path.join(root_dir, adapter_path)
 
             if not os.path.isdir(adapter_path):
-                # Auto-download built-in adapters from HF
-                adapter_id = os.path.basename(adapter_path)
-                if adapter_id.startswith("builtin_"):
-                    print(f"Adapter {adapter_id} not downloaded, attempting auto-download...")
-                    try:
-                        from hf_utils import download_builtin_adapter
-                        builtin_dir = os.path.dirname(adapter_path)
-                        download_builtin_adapter(adapter_id, builtin_dir)
-                    except Exception as e:
-                        print(f"Error: Auto-download failed for {adapter_id}: {e}")
-                        return False
-                else:
-                    print(f"Error: LoRA adapter path not found: {adapter_path}")
-                    return False
+                print(f"Error: LoRA adapter path not found: {adapter_path}")
+                return False
 
             # Load reference audio and text from adapter directory
             ref_wav_path = os.path.join(adapter_path, "ref_sample.wav")

@@ -90,16 +90,23 @@ def group_into_chunks(script_entries, max_chars=MAX_CHUNK_CHARS):
 logger = logging.getLogger(__name__)
 
 class ProjectManager:
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, output_dir=None):
         self.root_dir = root_dir
+        self.output_dir = output_dir or root_dir
         self.script_path = os.path.join(root_dir, "annotated_script.json")
         self.chunks_path = os.path.join(root_dir, "chunks.json")
         self.voicelines_dir = os.path.join(root_dir, "voicelines")
         self.voice_config_path = os.path.join(root_dir, "voice_config.json")
-        self.config_path = os.environ.get("ALEXANDRIA_CONFIG_PATH") or os.path.join(root_dir, "app", "config.json")
+        default_config_path = (
+            os.path.join(root_dir, "config", "config.json")
+            if os.environ.get("ALEXANDRIA_DATA_DIR")
+            else os.path.join(root_dir, "app", "config.json")
+        )
+        self.config_path = os.environ.get("ALEXANDRIA_CONFIG_PATH") or default_config_path
 
         # Ensure voicelines dir exists
         os.makedirs(self.voicelines_dir, exist_ok=True)
+        os.makedirs(self.output_dir, exist_ok=True)
 
         self.engine = None
         self._chunks_lock = threading.Lock()  # Thread-safe file writes
@@ -455,7 +462,7 @@ class ProjectManager:
             audio_segments, speakers, pause_ms, same_speaker_pause_ms, pause_overrides
         )
         output_filename = "cloned_audiobook.mp3"
-        output_path = os.path.join(self.root_dir, output_filename)
+        output_path = os.path.join(self.output_dir, output_filename)
         final_audio.export(output_path, format="mp3")
 
         return True, output_filename
@@ -574,9 +581,9 @@ class ProjectManager:
             audio_segments, speakers, pause_ms, same_speaker_pause_ms, pause_overrides
         )
 
-        temp_wav = os.path.join(self.root_dir, "temp_m4b_combined.wav")
-        meta_path = os.path.join(self.root_dir, "temp_m4b_meta.txt")
-        output_path = os.path.join(self.root_dir, "audiobook.m4b")
+        temp_wav = os.path.join(self.output_dir, "temp_m4b_combined.wav")
+        meta_path = os.path.join(self.output_dir, "temp_m4b_meta.txt")
+        output_path = os.path.join(self.output_dir, "audiobook.m4b")
 
         try:
             final_audio.export(temp_wav, format="wav")

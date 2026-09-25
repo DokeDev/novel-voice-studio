@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Alexandria Audiobook</title>
+    <title>Alexandria 有声书制作台</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        body { background-color: #f8f9fa; }
+        body { background-color: #f8f9fa; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
         .container-wide { max-width: 85%; margin-left: auto; margin-right: auto; padding-left: 12px; padding-right: 12px; }
         .nav-link { cursor: pointer; }
         .log-window {
@@ -76,6 +76,7 @@
                     <li class="nav-item" id="nav-preparer" style="display:none;"><a class="nav-link nav-advanced" data-tab="preparer">Preparer</a></li>
                     <li class="nav-item"><a class="nav-link nav-advanced" data-tab="dataset-builder">Dataset</a></li>
                     <li class="nav-item"><a class="nav-link nav-advanced" data-tab="training">Training</a></li>
+                    <li class="nav-item"><a class="nav-link nav-advanced" data-tab="models">Models</a></li>
                 </ul>
                 <ul class="navbar-nav ms-auto align-items-center">
                     <li class="nav-item small d-flex align-items-center" title="System Status">
@@ -141,8 +142,8 @@
                                 <label class="form-label">TTS Language</label>
                                 <select class="form-select" id="tts-language">
                                     <option value="Auto">Auto (detect)</option>
-                                    <option value="English" selected>English</option>
-                                    <option value="Chinese">Chinese</option>
+                                    <option value="English">English</option>
+                                    <option value="Chinese" selected>Chinese</option>
                                     <option value="French">French</option>
                                     <option value="German">German</option>
                                     <option value="Italian">Italian</option>
@@ -678,8 +679,8 @@
                         <div class="col-md-2">
                             <label class="form-label">Language</label>
                             <select class="form-select" id="lora-language">
-                                <option value="english" selected>English</option>
-                                <option value="chinese">Chinese</option>
+                                <option value="english">English</option>
+                                <option value="chinese" selected>Chinese</option>
                                 <option value="german">German</option>
                                 <option value="italian">Italian</option>
                                 <option value="portuguese">Portuguese</option>
@@ -1002,6 +1003,35 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="border rounded p-3 mt-3 text-start" id="publish-panel">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h6 class="mb-0"><i class="fas fa-cloud-arrow-up me-2"></i>Publish to Object Storage</h6>
+                                <span id="publish-config-status" class="badge bg-secondary">Checking</span>
+                            </div>
+                            <div class="row g-2 align-items-end">
+                                <div class="col-md-3">
+                                    <label class="form-label small mb-1">Book ID</label>
+                                    <input type="text" class="form-control form-control-sm" id="publish-book-id" placeholder="book-001">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label small mb-1">Title</label>
+                                    <input type="text" class="form-control form-control-sm" id="publish-title" placeholder="Book title">
+                                </div>
+                                <div class="col-md-2">
+                                    <label class="form-label small mb-1">Format</label>
+                                    <select class="form-select form-select-sm" id="publish-format">
+                                        <option value="m4b">M4B</option>
+                                        <option value="mp3">MP3</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3 text-end">
+                                    <button class="btn btn-primary btn-sm" id="publish-button" type="button" onclick="publishAudiobook()" disabled>
+                                        <i class="fas fa-cloud-arrow-up me-1"></i>Publish
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="publish-status" class="small mt-2 text-muted"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1010,6 +1040,52 @@
                 <div class="card-header">Generation Logs</div>
                 <div class="card-body p-0">
                     <div id="audio-logs" class="log-window"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Model Management Tab -->
+        <div id="models-tab" class="tab-content" style="display:none;">
+            <div class="card">
+                <div class="card-header d-flex align-items-center justify-content-between">
+                    <h4 class="mb-0"><i class="fas fa-cubes me-2"></i>Model Management</h4>
+                    <button class="btn btn-outline-secondary btn-sm" type="button" onclick="scanModels()" title="Scan the mounted model directory">
+                        <i class="fas fa-rotate me-1"></i>Scan
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="row align-items-end mb-4">
+                        <div class="col-lg-8">
+                            <label class="form-label">Mounted model directory</label>
+                            <input id="models-root" class="form-control font-monospace" type="text" readonly>
+                        </div>
+                        <div class="col-lg-4">
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="models-auto-download">
+                                <label class="form-check-label" for="models-auto-download">Download missing models automatically</label>
+                            </div>
+                            <button class="btn btn-outline-primary btn-sm" type="button" onclick="saveModelSettings()">
+                                <i class="fas fa-floppy-disk me-1"></i>Save policy
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="table-responsive border rounded">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Model</th>
+                                    <th>Purpose</th>
+                                    <th>Install path</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="models-table-body">
+                                <tr><td colspan="5" class="text-center text-muted py-4">Loading models...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1033,6 +1109,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/i18n-zh.js?v=20260919"></script>
     <script>
         // --- Toast & Confirm utilities ---
         function showToast(message, type = 'info', duration = 4000) {
@@ -1116,6 +1193,10 @@
                     loadLoraModels();
                 } else if (e.target.dataset.tab === 'dataset-builder') {
                     dsbLoadProjects(dsbCurrentProject);
+                } else if (e.target.dataset.tab === 'models') {
+                    loadModels();
+                } else if (e.target.dataset.tab === 'audio') {
+                    loadPublishConfig();
                 }
             });
         });
@@ -1160,6 +1241,12 @@
 
         // --- Setup Tab ---
 
+        let modelSettings = {
+            model_root: null,
+            auto_download_models: false,
+            model_paths: {}
+        };
+
         function toggleTTSMode() {
             const mode = document.getElementById('tts-mode').value;
             document.getElementById('tts-url-group').style.display = mode === 'external' ? '' : 'none';
@@ -1179,7 +1266,7 @@
                 document.getElementById('tts-mode').value = config.tts.mode || 'external';
                 document.getElementById('tts-url').value = config.tts.url || 'http://127.0.0.1:7860';
                 document.getElementById('tts-device').value = config.tts.device || 'auto';
-                document.getElementById('tts-language').value = config.tts.language || 'English';
+                document.getElementById('tts-language').value = config.tts.language || 'Chinese';
                 document.getElementById('parallel-workers').value = config.tts.parallel_workers || 2;
                 if (config.tts.batch_seed != null) {
                     document.getElementById('batch-seed').value = config.tts.batch_seed;
@@ -1202,6 +1289,12 @@
                 if (config.tts.pause_same_speaker_ms != null) {
                     document.getElementById('pause-same-speaker').value = config.tts.pause_same_speaker_ms;
                 }
+                modelSettings = {
+                    model_root: config.tts.model_root || null,
+                    auto_download_models: !!config.tts.auto_download_models,
+                    model_paths: config.tts.model_paths || {}
+                };
+                document.getElementById('models-auto-download').checked = modelSettings.auto_download_models;
                 toggleTTSMode();
 
                 // Load custom prompts if they exist and are non-empty
@@ -1367,7 +1460,10 @@
                     sub_batch_ratio: parseFloat(document.getElementById('sub-batch-ratio').value) || 5,
                     sub_batch_max_items: parseInt(document.getElementById('sub-batch-max-items').value) || 0,
                     pause_between_speakers_ms: parseInt(document.getElementById('pause-between-speakers').value) || 500,
-                    pause_same_speaker_ms: parseInt(document.getElementById('pause-same-speaker').value) || 250
+                    pause_same_speaker_ms: parseInt(document.getElementById('pause-same-speaker').value) || 250,
+                    model_root: modelSettings.model_root,
+                    auto_download_models: modelSettings.auto_download_models,
+                    model_paths: modelSettings.model_paths
                 },
                 prompts: {
                     system_prompt: document.getElementById('system-prompt').value,
@@ -1399,6 +1495,92 @@
                 showToast('Error saving config: ' + e.message, 'error');
             }
         });
+
+        // --- Model Management Tab ---
+
+        let modelPollTimer = null;
+
+        function renderModels(data) {
+            document.getElementById('models-root').value = data.root || '';
+            const tbody = document.getElementById('models-table-body');
+            tbody.innerHTML = data.models.map(model => {
+                let status = '<span class="badge bg-secondary">Not installed</span>';
+                if (model.installed) {
+                    status = '<span class="badge bg-success">Installed</span>';
+                } else if (model.download_status === 'downloading') {
+                    status = '<span class="badge bg-primary"><i class="fas fa-spinner fa-spin me-1"></i>Downloading</span>';
+                } else if (model.download_status === 'error') {
+                    status = `<span class="badge bg-danger" title="${escapeHtml(model.download_error || '')}">Failed</span>`;
+                }
+
+                const busy = model.download_status === 'downloading';
+                const action = model.installed
+                    ? '<button class="btn btn-sm btn-outline-secondary" disabled><i class="fas fa-check"></i></button>'
+                    : `<button class="btn btn-sm btn-outline-primary" onclick="downloadModel('${escapeHtml(model.id)}')" ${busy ? 'disabled' : ''} title="Download this approved model"><i class="fas fa-download"></i></button>`;
+
+                return `<tr>
+                    <td><strong>${escapeHtml(model.name)}</strong><div class="small text-muted font-monospace">${escapeHtml(model.repo_id)}</div></td>
+                    <td>${escapeHtml(model.purpose)}</td>
+                    <td class="small font-monospace text-break">${escapeHtml(model.path)}</td>
+                    <td>${status}</td>
+                    <td class="text-end">${action}</td>
+                </tr>`;
+            }).join('');
+
+            const downloading = data.models.some(model => model.download_status === 'downloading');
+            if (downloading && !modelPollTimer) {
+                modelPollTimer = setInterval(loadModels, 2000);
+            } else if (!downloading && modelPollTimer) {
+                clearInterval(modelPollTimer);
+                modelPollTimer = null;
+            }
+        }
+
+        async function loadModels() {
+            try {
+                const [models, config] = await Promise.all([
+                    API.get('/api/models'),
+                    API.get('/api/config')
+                ]);
+                modelSettings.model_root = config.tts.model_root || models.root || null;
+                modelSettings.auto_download_models = !!config.tts.auto_download_models;
+                modelSettings.model_paths = config.tts.model_paths || {};
+                document.getElementById('models-auto-download').checked = modelSettings.auto_download_models;
+                renderModels(models);
+            } catch (e) {
+                showToast('Could not load model status: ' + e.message, 'error');
+            }
+        }
+
+        async function scanModels() {
+            try {
+                renderModels(await API.post('/api/models/scan', {}));
+                showToast('Model directory scanned.', 'success');
+            } catch (e) {
+                showToast('Model scan failed: ' + e.message, 'error');
+            }
+        }
+
+        async function downloadModel(modelId) {
+            try {
+                await API.post(`/api/models/${encodeURIComponent(modelId)}/download`, {});
+                showToast('Model download started on this server.', 'success');
+                await loadModels();
+            } catch (e) {
+                showToast('Could not start model download: ' + e.message, 'error');
+            }
+        }
+
+        async function saveModelSettings() {
+            const enabled = document.getElementById('models-auto-download').checked;
+            try {
+                await API.post('/api/models/settings', { auto_download_models: enabled });
+                modelSettings.auto_download_models = enabled;
+                showToast('Model download policy saved.', 'success');
+            } catch (e) {
+                showToast('Could not save model policy: ' + e.message, 'error');
+            }
+        }
 
         // --- Script Tab ---
         document.getElementById('file-upload').addEventListener('change', async () => {
@@ -2613,6 +2795,75 @@
             }
         };
 
+        async function loadPublishConfig() {
+            const badge = document.getElementById('publish-config-status');
+            const button = document.getElementById('publish-button');
+            try {
+                const config = await API.get('/api/publish/config');
+                if (config.configured) {
+                    badge.className = 'badge bg-success';
+                    badge.textContent = config.bucket;
+                    button.disabled = false;
+                } else {
+                    badge.className = 'badge bg-warning text-dark';
+                    badge.textContent = 'Not configured';
+                    button.disabled = true;
+                }
+            } catch (e) {
+                badge.className = 'badge bg-danger';
+                badge.textContent = 'Unavailable';
+                button.disabled = true;
+            }
+        }
+
+        window.publishAudiobook = async () => {
+            const button = document.getElementById('publish-button');
+            const statusEl = document.getElementById('publish-status');
+            const bookId = document.getElementById('publish-book-id').value.trim();
+            if (!bookId) {
+                showToast('Book ID is required.', 'warning');
+                return;
+            }
+
+            button.disabled = true;
+            statusEl.className = 'small mt-2 text-info';
+            statusEl.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Uploading audio and manifest...';
+            try {
+                await API.post('/api/publish', {
+                    book_id: bookId,
+                    title: document.getElementById('publish-title').value,
+                    audio_format: document.getElementById('publish-format').value
+                });
+
+                const poll = setInterval(async () => {
+                    try {
+                        const state = await API.get('/api/status/publish');
+                        if (!state.running) {
+                            clearInterval(poll);
+                            button.disabled = false;
+                            if (state.result) {
+                                const destination = state.result.audio_url || state.result.audio_key;
+                                statusEl.className = 'small mt-2 text-success';
+                                statusEl.textContent = `Published: ${destination}`;
+                            } else {
+                                statusEl.className = 'small mt-2 text-danger';
+                                statusEl.textContent = state.logs[state.logs.length - 1] || 'Publish failed';
+                            }
+                        }
+                    } catch (e) {
+                        clearInterval(poll);
+                        button.disabled = false;
+                        statusEl.className = 'small mt-2 text-danger';
+                        statusEl.textContent = e.message;
+                    }
+                }, 1000);
+            } catch (e) {
+                button.disabled = false;
+                statusEl.className = 'small mt-2 text-danger';
+                statusEl.textContent = e.message;
+            }
+        };
+
         // --- Polling Logic ---
         async function pollLogs(taskName, elementId) {
             const el = document.getElementById(elementId);
@@ -3175,7 +3426,7 @@
                 lora_r: parseInt(document.getElementById('lora-rank').value) || 32,
                 lora_alpha: parseInt(document.getElementById('lora-alpha').value) || 128,
                 gradient_accumulation_steps: parseInt(document.getElementById('lora-grad-accum').value) || 8,
-                language: document.getElementById('lora-language').value || 'english'
+                language: document.getElementById('lora-language').value || 'chinese'
             };
 
             const btn = document.getElementById('btn-lora-train');

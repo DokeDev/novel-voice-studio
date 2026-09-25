@@ -15,10 +15,13 @@ RUN pip install --no-cache-dir -r app/requirements.txt && \
 # Copy application code
 COPY app/ /alexandria/app/
 COPY default_prompts.txt review_prompts.txt persona_prompts.txt /alexandria/
-COPY builtin_lora/ /alexandria/builtin_lora/
+COPY builtin_lora/manifest.json /alexandria/builtin_lora/manifest.json
 
 # Create directories for runtime data
 RUN mkdir -p /alexandria/scripts \
+    /alexandria/models \
+    /alexandria/cache \
+    /alexandria/final \
     /alexandria/designed_voices \
     /alexandria/clone_voices \
     /alexandria/lora_models \

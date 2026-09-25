@@ -1,23 +1,26 @@
-You produce concise JSON only.
+你是中文有声书的角色声音设计助手。只输出简洁、合法的 JSON，不要输出 Markdown、解释或思考过程。
 ---SEPARATOR---
-You are a voice designer assistant. Given the following narrator-intro context and lines by character '{speaker}':
+请根据角色“{speaker}”首次出现前的旁白上下文和角色台词，生成可复用的声音设定。
 
-Narrator context before first appearance:
+首次出现前的旁白：
 {narrator_context}
 
-Character lines:
+角色台词：
 {sample_lines}
 
-Produce a JSON object with two keys: 'description' and 'ref_text'.
-- 'description': a concise natural-language voice persona describing age, gender, timbre, accent, speaking rate, typical emotional tone, and delivery guidance (2-3 sentences).
-- 'ref_text': a 1-2 sentence short sample that best captures this character's voice and can be used as a TTS reference.
-Only output the JSON object and nothing else.
----SEPARATOR---
-You are compiling an audiobook character reference into a final TTS voice persona.
-Use only supported observations. The final description should be practical for voice design.
-Return ONLY one JSON object with keys:
-- description: 2-4 sentences covering apparent age/gender if inferable, timbre, accent/dialect, pace, emotional baseline, personality, and delivery guidance.
-- ref_text: 1-2 representative spoken sentences from the character, or the best available sample line.
+只输出一个 JSON 对象，包含两个键：
+- "description"：使用中文写 2-3 句话，描述有文本依据的年龄感、声线质感、语速、口音或地域特征、情绪基线和表达方式。无法判断的特征不要编造。描述应适合声音设计或固定音色匹配，不要写人物外貌和身体动作，不要模仿现实人物或在世配音演员。
+- "ref_text"：从给出的角色台词中原样选择一句清晰、有代表性、长度适中的句子。优先选择自然中性、发音完整的 8-40 个汉字，不要选择纯语气词、尖叫、哭声、喘息、露骨片段或强烈情绪句，不得自行创作。
 
-Character reference:
+声音身份由 description 固定，后续每句的情绪由 instruct 控制，因此 description 不要绑定某一个临时场景的情绪。
+---SEPARATOR---
+你正在把角色分析资料汇总为可长期复用的中文有声书声音设定。
+
+只使用资料中有明确依据的信息。无法确定的年龄、性别、口音或地域不要猜测。声音设定必须适合声音设计、声音克隆参考或固定 LoRA 音色匹配，并与临时场景情绪分离。
+
+只输出一个 JSON 对象：
+- "description"：使用中文写 2-4 句话，概括年龄感、声线质感、语速、口音或地域特征、情绪基线、性格和表达方式。不要描述外貌、动作，不要模仿现实人物或在世配音演员。
+- "ref_text"：优先从资料中的角色原话原样选择一句 8-40 个汉字、清晰完整、自然中性的代表性台词。不要选择纯语气词、尖叫、哭声、喘息、露骨片段或强烈场景句；没有合适台词时返回空字符串，不得自行创作。
+
+角色资料：
 {character_ref}

@@ -8,7 +8,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTa
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 import re
 import time
@@ -28,6 +28,8 @@ from default_prompts import load_default_prompts
 from review_prompts import load_review_prompts
 from persona_prompts import load_persona_prompts
 from hf_utils import fetch_builtin_manifest, download_builtin_adapter, is_adapter_downloaded
+from model_manager import ModelManager, ModelDownloadError
+from object_storage import ObjectStoragePublisher
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -37,13 +39,21 @@ app = FastAPI(title="Alexandria Audiobook")
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(BASE_DIR)
-CONFIG_PATH = os.environ.get("ALEXANDRIA_CONFIG_PATH") or os.path.join(BASE_DIR, "config.json")
+CODE_ROOT = os.path.dirname(BASE_DIR)
+DATA_DIR_OVERRIDE = os.environ.get("ALEXANDRIA_DATA_DIR")
+ROOT_DIR = os.path.abspath(os.path.expanduser(DATA_DIR_OVERRIDE)) if DATA_DIR_OVERRIDE else CODE_ROOT
+DEFAULT_CONFIG_PATH = (
+    os.path.join(ROOT_DIR, "config", "config.json")
+    if DATA_DIR_OVERRIDE
+    else os.path.join(BASE_DIR, "config.json")
+)
+CONFIG_PATH = os.environ.get("ALEXANDRIA_CONFIG_PATH") or DEFAULT_CONFIG_PATH
 VOICE_CONFIG_PATH = os.path.join(ROOT_DIR, "voice_config.json")
 SCRIPT_PATH = os.path.join(ROOT_DIR, "annotated_script.json")
-AUDIOBOOK_PATH = os.path.join(ROOT_DIR, "cloned_audiobook.mp3")
-M4B_PATH = os.path.join(ROOT_DIR, "audiobook.m4b")
-UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+OUTPUT_DIR = os.environ.get("ALEXANDRIA_OUTPUT_DIR") or ROOT_DIR
+AUDIOBOOK_PATH = os.path.join(OUTPUT_DIR, "cloned_audiobook.mp3")
+M4B_PATH = os.path.join(OUTPUT_DIR, "audiobook.m4b")
+UPLOADS_DIR = os.path.join(ROOT_DIR, "uploads") if DATA_DIR_OVERRIDE else os.path.join(BASE_DIR, "uploads")
 SCRIPTS_DIR = os.path.join(ROOT_DIR, "scripts")
 CHUNKS_PATH = os.path.join(ROOT_DIR, "chunks.json")
 DESIGNED_VOICES_DIR = os.path.join(ROOT_DIR, "designed_voices")
@@ -54,6 +64,10 @@ BUILTIN_LORA_DIR = os.path.join(ROOT_DIR, "builtin_lora")
 DATASET_BUILDER_DIR = os.path.join(ROOT_DIR, "dataset_builder")
 PREPARER_SCRIPT_PATH = os.path.join(BASE_DIR, "alexandria_preparer.py")
 PREPARER_OUTPUT_DIR = os.path.join(ROOT_DIR, "preparer_output")
+MODELS_DIR = os.environ.get("ALEXANDRIA_MODELS_DIR") or os.path.join(ROOT_DIR, "models")
+BUILTIN_LORA_ENABLED = os.environ.get(
+    "ALEXANDRIA_ENABLE_BUILTIN_LORA", "false"
+).lower() in ("1", "true", "yes")
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(SCRIPTS_DIR, exist_ok=True)
@@ -63,6 +77,8 @@ os.makedirs(LORA_MODELS_DIR, exist_ok=True)
 os.makedirs(LORA_DATASETS_DIR, exist_ok=True)
 os.makedirs(DATASET_BUILDER_DIR, exist_ok=True)
 os.makedirs(PREPARER_OUTPUT_DIR, exist_ok=True)
+os.makedirs(MODELS_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Mount static files with absolute path
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -91,7 +107,8 @@ app.mount("/builtin_lora", StaticFiles(directory=BUILTIN_LORA_DIR), name="builti
 app.mount("/dataset_builder", StaticFiles(directory=DATASET_BUILDER_DIR), name="dataset_builder")
 
 # Initialize Project Manager
-project_manager = ProjectManager(ROOT_DIR)
+project_manager = ProjectManager(ROOT_DIR, output_dir=OUTPUT_DIR)
+model_manager = ModelManager(MODELS_DIR)
 
 # Reset any chunks stuck in "generating" from a prior interrupted session
 _startup_chunks = project_manager.load_chunks()
@@ -191,6 +208,24 @@ async def get_system_stats():
         }
     }
 
+@app.get("/api/models")
+async def list_models():
+    """List approved models and their state in the mounted model directory."""
+    return {"root": str(model_manager.root_dir), "models": model_manager.list_models()}
+
+@app.post("/api/models/scan")
+async def scan_models():
+    """Rescan after an administrator installs model files manually."""
+    return {"root": str(model_manager.root_dir), "models": model_manager.list_models()}
+
+@app.post("/api/models/{model_key}/download")
+async def download_model(model_key: str):
+    """Start an administrator-triggered download for an allow-listed model."""
+    try:
+        return model_manager.start_download(model_key)
+    except ModelDownloadError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 # Data Models
 class LLMConfig(BaseModel):
     base_url: str
@@ -201,7 +236,7 @@ class TTSConfig(BaseModel):
     mode: str = "local"  # "local" or "external"
     url: str = "http://127.0.0.1:7860"  # external mode only
     device: str = "auto"  # local mode: "auto", "cuda:0", "cpu", etc.
-    language: str = "English"  # TTS language
+    language: str = "Chinese"  # TTS language
     parallel_workers: int = 2  # concurrent TTS workers
     batch_seed: Optional[int] = None  # Single seed for batch mode, None/-1 = random
     compile_codec: bool = False  # torch.compile the codec for ~3-4x batch throughput (slow first run)
@@ -212,6 +247,9 @@ class TTSConfig(BaseModel):
     batch_group_by_type: bool = False  # group chunks by voice type for efficient batching
     pause_between_speakers_ms: int = 500  # silence (ms) between different speakers during merge
     pause_same_speaker_ms: int = 250  # silence (ms) when same speaker continues during merge
+    model_root: Optional[str] = None
+    auto_download_models: bool = False
+    model_paths: Dict[str, str] = Field(default_factory=dict)
 
 class GenerationConfig(BaseModel):
     chunk_size: int = 3000
@@ -239,6 +277,9 @@ class AppConfig(BaseModel):
     prompts: Optional[PromptConfig] = None
     generation: Optional[GenerationConfig] = None
 
+class ModelSettingsRequest(BaseModel):
+    auto_download_models: bool = False
+
 class VoiceConfigItem(BaseModel):
     type: str = "custom"
     voice: Optional[str] = "Ryan"
@@ -260,6 +301,11 @@ class ChunkUpdate(BaseModel):
 class BatchGenerateRequest(BaseModel):
     indices: List[int]
 
+class PublishRequest(BaseModel):
+    book_id: str
+    title: str = ""
+    audio_format: str = "m4b"
+
 class VoiceDesignPreviewRequest(BaseModel):
     description: str
     sample_text: str
@@ -280,7 +326,7 @@ class LoraTrainingRequest(BaseModel):
     lora_r: int = 32
     lora_alpha: int = 128
     gradient_accumulation_steps: int = 8
-    language: str = "english"
+    language: str = "chinese"
 
 class LoraTestRequest(BaseModel):
     adapter_id: str
@@ -360,6 +406,7 @@ process_state = {
     "audio": {"running": False, "logs": [], "cancel": False},
     "audacity_export": {"running": False, "logs": []},
     "m4b_export": {"running": False, "logs": []},
+    "publish": {"running": False, "logs": [], "result": None},
     "review": {"running": False, "logs": []},
     "lora_training": {"running": False, "logs": []},
     "dataset_gen": {"running": False, "logs": []},
@@ -476,7 +523,11 @@ async def get_config():
         "tts": {
             "mode": "local",
             "url": "http://127.0.0.1:7860",
-            "device": "auto"
+            "device": "auto",
+            "language": "Chinese",
+            "model_root": MODELS_DIR,
+            "auto_download_models": False,
+            "model_paths": {}
         },
         "prompts": {
             "system_prompt": "",
@@ -596,6 +647,24 @@ async def save_config(config: AppConfig):
     # Reset engine so it picks up new TTS settings on next use
     project_manager.engine = None
     return {"status": "saved"}
+
+@app.post("/api/models/settings")
+async def save_model_settings(request: ModelSettingsRequest):
+    """Persist the model download policy without replacing unrelated settings."""
+    config = await get_config()
+    config.setdefault("tts", {})["auto_download_models"] = request.auto_download_models
+    config["tts"]["model_root"] = MODELS_DIR
+    config["tts"].setdefault("model_paths", {})
+    config.pop("current_file", None)
+    validated = AppConfig.model_validate(config)
+    os.makedirs(os.path.dirname(CONFIG_PATH) or ".", exist_ok=True)
+    atomic_json_write(validated.model_dump(), CONFIG_PATH)
+    model_manager.auto_download = request.auto_download_models
+    project_manager.engine = None
+    return {
+        "status": "saved",
+        "auto_download_models": request.auto_download_models,
+    }
 
 class _HTMLTextExtractor(HTMLParser):
     """Strip HTML tags from EPUB content, preserving block-level structure."""
@@ -1118,6 +1187,58 @@ async def get_audiobook_m4b():
         raise HTTPException(status_code=404, detail="M4B audiobook not found. Export it first.")
     return FileResponse(M4B_PATH, filename="audiobook.m4b", media_type="audio/mp4")
 
+@app.get("/api/publish/config")
+async def get_publish_config():
+    """Return non-secret object storage configuration for the admin UI."""
+    return ObjectStoragePublisher.configuration_status()
+
+@app.post("/api/publish")
+async def publish_audiobook(request: PublishRequest, background_tasks: BackgroundTasks):
+    """Upload a generated audiobook and playback manifest to object storage."""
+    state = process_state["publish"]
+    if state["running"]:
+        raise HTTPException(status_code=400, detail="A publish job is already running")
+
+    book_id = request.book_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", book_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Book ID must use 1-128 letters, numbers, dots, underscores, or hyphens",
+        )
+
+    audio_format = request.audio_format.lower().strip()
+    paths = {"mp3": AUDIOBOOK_PATH, "m4b": M4B_PATH}
+    if audio_format not in paths:
+        raise HTTPException(status_code=400, detail="Audio format must be mp3 or m4b")
+    audio_path = paths[audio_format]
+    if not os.path.isfile(audio_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"{audio_format.upper()} output not found. Generate or export it first.",
+        )
+    if not ObjectStoragePublisher.configuration_status()["configured"]:
+        raise HTTPException(status_code=400, detail="Object storage is not configured")
+
+    state["running"] = True
+    state["logs"] = [f"Publishing {audio_format.upper()} for {book_id}..."]
+    state["result"] = None
+
+    def task():
+        try:
+            publisher = ObjectStoragePublisher.from_env()
+            result = publisher.publish(book_id, request.title.strip(), audio_path)
+            state["result"] = result
+            state["logs"].append(f"Published audio: {result['audio_key']}")
+            state["logs"].append(f"Published manifest: {result['manifest_key']}")
+        except Exception as exc:
+            logger.error(f"Object storage publish failed: {exc}")
+            state["logs"].append(f"Publish failed: {exc}")
+        finally:
+            state["running"] = False
+
+    background_tasks.add_task(task)
+    return {"status": "started", "book_id": book_id, "audio_format": audio_format}
+
 @app.post("/api/m4b_cover")
 async def upload_m4b_cover(file: UploadFile = File(...)):
     """Upload a cover image for M4B export."""
@@ -1531,6 +1652,8 @@ LORA_MODELS_MANIFEST = os.path.join(LORA_MODELS_DIR, "manifest.json")
 
 def _load_builtin_lora_manifest():
     """Load built-in LoRA manifest from HF (with local fallback). Returns ALL entries with download status."""
+    if not BUILTIN_LORA_ENABLED:
+        return []
     entries = fetch_builtin_manifest(BUILTIN_LORA_DIR)
     result = []
     for entry in entries:
@@ -1766,6 +1889,11 @@ async def lora_start_training(request: LoraTrainingRequest, background_tasks: Ba
     adapter_id = f"{safe_name}_{int(time.time())}"
     output_dir = os.path.join(LORA_MODELS_DIR, adapter_id)
 
+    try:
+        base_model_path = model_manager.resolve("qwen3_tts_base", allow_download=False)
+    except ModelDownloadError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # Unload TTS engine to free GPU
     if project_manager.engine is not None:
         logger.info("Unloading TTS engine for LoRA training...")
@@ -1777,6 +1905,7 @@ async def lora_start_training(request: LoraTrainingRequest, background_tasks: Ba
         sys.executable, "-u", "train_lora.py",
         "--data_dir", dataset_dir,
         "--output_dir", output_dir,
+        "--model_name", base_model_path,
         "--epochs", str(request.epochs),
         "--lr", str(request.lr),
         "--batch_size", str(request.batch_size),
@@ -1864,6 +1993,8 @@ async def lora_delete_model(adapter_id: str):
 @app.post("/api/lora/download/{adapter_id}")
 async def lora_download_builtin(adapter_id: str):
     """Download a built-in LoRA adapter from HuggingFace."""
+    if not BUILTIN_LORA_ENABLED:
+        raise HTTPException(status_code=403, detail="Built-in LoRA downloads are disabled")
     manifest = fetch_builtin_manifest(BUILTIN_LORA_DIR)
     hf_name = adapter_id.replace("builtin_", "", 1)
     entry = next((e for e in manifest if e["id"] == hf_name or e["id"] == adapter_id), None)
@@ -1900,13 +2031,7 @@ async def lora_test_model(request: LoraTestRequest):
         adapter_dir = os.path.join(LORA_MODELS_DIR, request.adapter_id)
         audio_url_prefix = f"/lora_models/{request.adapter_id}"
 
-    if not os.path.isdir(adapter_dir) and is_builtin:
-        try:
-            download_builtin_adapter(request.adapter_id, BUILTIN_LORA_DIR)
-            adapter_dir = os.path.join(BUILTIN_LORA_DIR, request.adapter_id)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Auto-download failed: {e}")
-    elif not os.path.isdir(adapter_dir):
+    if not os.path.isdir(adapter_dir):
         raise HTTPException(status_code=404, detail="Adapter files not found")
 
     engine = project_manager.get_engine()
@@ -1959,13 +2084,7 @@ async def lora_preview(adapter_id: str):
         adapter_dir = os.path.join(LORA_MODELS_DIR, adapter_id)
         url_prefix = f"/lora_models/{adapter_id}"
 
-    if not os.path.isdir(adapter_dir) and is_builtin:
-        try:
-            download_builtin_adapter(adapter_id, BUILTIN_LORA_DIR)
-            adapter_dir = os.path.join(BUILTIN_LORA_DIR, adapter_id)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Auto-download failed: {e}")
-    elif not os.path.isdir(adapter_dir):
+    if not os.path.isdir(adapter_dir):
         raise HTTPException(status_code=404, detail="Adapter files not found")
 
     preview_path = os.path.join(adapter_dir, "preview_sample.wav")
