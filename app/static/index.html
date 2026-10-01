@@ -1037,6 +1037,30 @@
             </div>
 
             <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="m-0"><i class="fas fa-trash-can me-2"></i>数据清理</h5>
+                    <span id="cleanup-status" class="small text-muted"></span>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex flex-wrap gap-2">
+                        <button class="btn btn-outline-danger btn-sm cleanup-button" onclick="deleteProjectData('segments')">
+                            <i class="fas fa-wave-square me-1"></i>清除分段语音
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm cleanup-button" onclick="deleteProjectData('outputs')">
+                            <i class="fas fa-file-audio me-1"></i>删除合并结果
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm cleanup-button" onclick="deleteProjectData('script')">
+                            <i class="fas fa-file-lines me-1"></i>删除当前脚本及分段语音
+                        </button>
+                        <button class="btn btn-danger btn-sm cleanup-button" onclick="deleteProjectData('all')">
+                            <i class="fas fa-trash me-1"></i>清空当前小说全部生成数据
+                        </button>
+                    </div>
+                    <div class="form-text mt-2">不会删除模型、LoRA、上传原文、已保存脚本或对象存储中的内容。</div>
+                </div>
+            </div>
+
+            <div class="card">
                 <div class="card-header">Generation Logs</div>
                 <div class="card-body p-0">
                     <div id="audio-logs" class="log-window"></div>
@@ -2865,6 +2889,49 @@
                 button.disabled = false;
                 statusEl.className = 'small mt-2 text-danger';
                 statusEl.textContent = e.message;
+            }
+        };
+
+        window.deleteProjectData = async (category) => {
+            const messages = {
+                segments: '确定清除当前小说的全部分段语音吗？脚本会保留，所有条目将恢复为待生成状态。',
+                outputs: '确定删除当前合并生成的 MP3、M4B 和 Audacity 导出文件吗？分段语音会保留。',
+                script: '确定删除当前脚本、角色声音绑定和全部分段语音吗？已保存脚本和合并结果会保留。',
+                all: '确定清空当前小说的脚本、角色声音绑定、分段语音和全部合并结果吗？此操作不能撤销。'
+            };
+            if (!messages[category] || !await showConfirm(messages[category])) return;
+
+            const statusEl = document.getElementById('cleanup-status');
+            const buttons = document.querySelectorAll('.cleanup-button');
+            buttons.forEach(button => button.disabled = true);
+            statusEl.className = 'small text-info';
+            statusEl.textContent = '正在清理...';
+
+            try {
+                const response = await fetch(`/api/project_data/${category}`, { method: 'DELETE' });
+                await API._handleError(response);
+                const result = await response.json();
+                statusEl.className = 'small text-success';
+                statusEl.textContent = `已删除 ${result.deleted_count} 个文件`;
+
+                if (category === 'segments' || category === 'script' || category === 'all') {
+                    const tbody = document.getElementById('chunks-table-body');
+                    if (tbody) tbody.innerHTML = '';
+                }
+                if (category === 'outputs' || category === 'all') {
+                    const player = document.getElementById('main-audio');
+                    player.pause();
+                    player.removeAttribute('src');
+                    player.load();
+                    document.getElementById('audio-player-container').style.display = 'none';
+                }
+                showToast('数据清理完成。', 'success');
+            } catch (e) {
+                statusEl.className = 'small text-danger';
+                statusEl.textContent = e.message;
+                showToast('清理失败：' + e.message, 'error');
+            } finally {
+                buttons.forEach(button => button.disabled = false);
             }
         };
 

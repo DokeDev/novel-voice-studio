@@ -17,6 +17,7 @@ import threading
 import zipfile
 import subprocess
 import aiofiles
+import glob
 from utils import atomic_json_write, stable_seed
 from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
@@ -1423,6 +1424,72 @@ async def cancel_audio():
         if reset_count:
             project_manager.save_chunks(chunks)
     return {"status": "not_running", "reset_chunks": reset_count}
+
+
+def _remove_generated_file(path: str, deleted: List[str]):
+    if os.path.isfile(path) or os.path.islink(path):
+        os.remove(path)
+        deleted.append(path)
+
+
+def _clear_segment_audio(deleted: List[str]):
+    for name in os.listdir(VOICELINES_DIR):
+        path = os.path.join(VOICELINES_DIR, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+            deleted.append(path)
+        else:
+            _remove_generated_file(path, deleted)
+
+    for pattern in ("temp_chunk_*.wav", "temp_batch_*.wav"):
+        for path in glob.glob(os.path.join(ROOT_DIR, pattern)):
+            _remove_generated_file(path, deleted)
+
+    chunks = project_manager.load_chunks()
+    if chunks:
+        for chunk in chunks:
+            chunk["audio_path"] = None
+            chunk["status"] = "pending"
+        project_manager.save_chunks(chunks)
+
+
+def _clear_merged_outputs(deleted: List[str]):
+    for path in (
+        AUDIOBOOK_PATH,
+        M4B_PATH,
+        os.path.join(ROOT_DIR, "audacity_export.zip"),
+    ):
+        _remove_generated_file(path, deleted)
+
+
+@app.delete("/api/project_data/{category}")
+async def delete_project_data(category: str):
+    """Delete selected generated data for the current book."""
+    allowed = {"segments", "outputs", "script", "all"}
+    if category not in allowed:
+        raise HTTPException(status_code=400, detail="Unknown cleanup category")
+
+    active = [name for name, state in process_state.items() if state.get("running")]
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete data while tasks are running: {', '.join(active)}",
+        )
+
+    deleted = []
+    if category in {"segments", "script", "all"}:
+        _clear_segment_audio(deleted)
+
+    if category in {"outputs", "all"}:
+        _clear_merged_outputs(deleted)
+
+    if category in {"script", "all"}:
+        for path in (SCRIPT_PATH, CHUNKS_PATH, VOICE_CONFIG_PATH):
+            _remove_generated_file(path, deleted)
+        project_manager.engine = None
+        gc.collect()
+
+    return {"status": "deleted", "category": category, "deleted_count": len(deleted)}
 
 ## ── Saved Scripts ──────────────────────────────────────────────
 
