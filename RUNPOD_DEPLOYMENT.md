@@ -88,7 +88,25 @@ ALEXANDRIA_S3_PREFIX=audiobooks
 
 ## 4. 启动和访问
 
-部署 Pod 后查看 Logs，正常情况下最后会看到 Uvicorn 监听 `0.0.0.0:4200`。
+进入项目目录后使用启动脚本：
+
+```bash
+cd /workspace/novel-voice-studio
+chmod +x start.sh
+./start.sh
+```
+
+脚本会自动检查 `4200` 端口和旧的 `app.pid`，停止旧进程后重新启动服务。只有健康检查成功后才会写入新 PID；启动失败时会直接显示最近的日志。
+
+以后更新和重启只需要：
+
+```bash
+cd /workspace/novel-voice-studio
+git pull origin main
+./start.sh
+```
+
+正常情况下会显示 Uvicorn 已监听 `0.0.0.0:4200`。
 
 RunPod HTTP Proxy 地址格式为：
 
