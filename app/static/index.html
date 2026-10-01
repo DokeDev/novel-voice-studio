@@ -206,14 +206,14 @@
                         </div>
                         <div class="row mb-3">
                             <div class="col-md-2">
-                                <label class="form-label">Speaker Change Pause (ms)</label>
-                                <input type="number" class="form-control" id="pause-between-speakers" value="500" min="0" step="50">
-                                <div class="form-text">Silence between different speakers on merge</div>
+                                <label class="form-label">角色切换停顿（毫秒）</label>
+                                <input type="number" class="form-control" id="pause-between-speakers" value="800" min="0" step="50">
+                                <div class="form-text">合并音频时，不同角色之间的停顿</div>
                             </div>
                             <div class="col-md-2">
-                                <label class="form-label">Same Speaker Pause (ms)</label>
-                                <input type="number" class="form-control" id="pause-same-speaker" value="250" min="0" step="50">
-                                <div class="form-text">Silence when same speaker continues on merge</div>
+                                <label class="form-label">同角色连续句停顿（毫秒）</label>
+                                <input type="number" class="form-control" id="pause-same-speaker" value="350" min="0" step="50">
+                                <div class="form-text">合并音频时，同一角色连续朗读的停顿</div>
                             </div>
                         </div>
 
@@ -1459,8 +1459,8 @@
                     sub_batch_min_size: parseInt(document.getElementById('sub-batch-min-size').value) || 4,
                     sub_batch_ratio: parseFloat(document.getElementById('sub-batch-ratio').value) || 5,
                     sub_batch_max_items: parseInt(document.getElementById('sub-batch-max-items').value) || 0,
-                    pause_between_speakers_ms: parseInt(document.getElementById('pause-between-speakers').value) || 500,
-                    pause_same_speaker_ms: parseInt(document.getElementById('pause-same-speaker').value) || 250,
+                    pause_between_speakers_ms: parseInt(document.getElementById('pause-between-speakers').value) || 800,
+                    pause_same_speaker_ms: parseInt(document.getElementById('pause-same-speaker').value) || 350,
                     model_root: modelSettings.model_root,
                     auto_download_models: modelSettings.auto_download_models,
                     model_paths: modelSettings.model_paths
@@ -1768,6 +1768,10 @@
                                         return names.map(n => `<option value="${escapeHtml(n)}" ${config.alias_of === n ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('');
                                     })()}
                                 </select>
+                                <div class="form-text small text-muted mt-2">固定音色种子：</div>
+                                <input type="number" class="form-control form-control-sm voice-seed mt-1"
+                                    value="${escapeHtml(String(config.seed ?? -1))}" min="-1" step="1"
+                                    title="同一角色使用相同种子，可提高跨句音色一致性">
                             </div>
                             <div class="col-md-9">
                                 <div class="mb-2">
@@ -1931,8 +1935,8 @@
             }
             container.innerHTML = voices.map((v, i) => createVoiceCard(v, i)).join('');
 
-            // If any voice has no saved config, save defaults immediately
-            if (voices.some(v => !v.config || Object.keys(v.config).length === 0)) {
+            // Save defaults and migrate legacy random seeds immediately.
+            if (voices.some(v => !v.config || Object.keys(v.config).length === 0 || v.seed_migrated)) {
                 debouncedSaveVoices();
             }
         }
@@ -1951,14 +1955,14 @@
                         type: 'custom',
                         voice: card.querySelector('.voice-select').value,
                         character_style: card.querySelector('.character-style').value,
-                        seed: "-1"
+                        seed: card.querySelector('.voice-seed').value || "-1"
                     };
                 } else if (type === 'clone') {
                     config[name] = {
                         type: 'clone',
                         ref_text: card.querySelector('.ref-text').value,
                         ref_audio: card.querySelector('.ref-audio').value,
-                        seed: "-1"
+                        seed: card.querySelector('.voice-seed').value || "-1"
                     };
                 } else if (type === 'builtin_lora') {
                     const adapterId = card.querySelector('.builtin-lora-select').value;
@@ -1968,7 +1972,7 @@
                         adapter_id: adapterId,
                         adapter_path: adapterEntry?.adapter_path || '',
                         character_style: card.querySelector('.builtin-lora-style').value,
-                        seed: "-1"
+                        seed: card.querySelector('.voice-seed').value || "-1"
                     };
                 } else if (type === 'lora') {
                     const adapterId = card.querySelector('.lora-adapter-select').value;
@@ -1978,13 +1982,13 @@
                         adapter_id: adapterId,
                         adapter_path: adapterEntry?.adapter_path || (adapterId ? `lora_models/${adapterId}` : ''),
                         character_style: card.querySelector('.lora-character-style').value,
-                        seed: "-1"
+                        seed: card.querySelector('.voice-seed').value || "-1"
                     };
                 } else if (type === 'design') {
                     config[name] = {
                         type: 'design',
                         description: card.querySelector('.design-description').value,
-                        seed: "-1"
+                        seed: card.querySelector('.voice-seed').value || "-1"
                     };
                 }
                 // Include alias_of if set

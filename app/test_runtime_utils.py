@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from utils import canonicalize_speaker_label, get_data_root
+from utils import canonicalize_speaker_label, get_data_root, stable_seed
 
 
 class RuntimeUtilsTests(unittest.TestCase):
@@ -22,6 +22,11 @@ class RuntimeUtilsTests(unittest.TestCase):
 
     def test_character_names_are_preserved(self):
         self.assertEqual(canonicalize_speaker_label(" 顾言 "), "顾言")
+
+    def test_stable_seed_is_reproducible_and_role_specific(self):
+        self.assertEqual(stable_seed("顾言"), stable_seed("顾言"))
+        self.assertNotEqual(stable_seed("顾言"), stable_seed("程野"))
+        self.assertGreaterEqual(stable_seed("顾言"), 0)
 
 
 if __name__ == "__main__":

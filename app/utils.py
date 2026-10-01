@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 import re
 import time
 import tempfile
@@ -19,6 +20,12 @@ def canonicalize_speaker_label(value):
     if letters_only in {"NARRATOR", "NARRATION", "NARRATIVE"}:
         return "NARRATOR"
     return label
+
+
+def stable_seed(value):
+    """Return a reproducible non-negative 31-bit seed for a string value."""
+    digest = hashlib.sha256(str(value or "").encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
 
 
 def atomic_json_write(data, target_path, max_retries=5):

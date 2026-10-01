@@ -8,9 +8,10 @@ import numpy as np
 import soundfile as sf
 from pydub import AudioSegment
 from model_manager import ModelManager
+from utils import stable_seed
 
-DEFAULT_PAUSE_MS = 500  # Pause between different speakers
-SAME_SPEAKER_PAUSE_MS = 250  # Shorter pause for same speaker continuing
+DEFAULT_PAUSE_MS = 800  # Pause between different speakers
+SAME_SPEAKER_PAUSE_MS = 350  # Shorter pause for same speaker continuing
 
 
 def sanitize_filename(name):
@@ -805,7 +806,17 @@ class TTSEngine:
             print("Warning: Design voice has no description or instruct. Using generic.")
             description = "A clear, natural speaking voice"
 
-        wav_path, sr = self.generate_voice_design(description=description, sample_text=text)
+        try:
+            seed = int(voice_data.get("seed", -1))
+        except (TypeError, ValueError):
+            seed = -1
+        if seed < 0:
+            seed = stable_seed(base_desc or description)
+        wav_path, sr = self.generate_voice_design(
+            description=description,
+            sample_text=text,
+            seed=seed,
+        )
         shutil.copy2(wav_path, output_path)
         return True
 
@@ -975,7 +986,9 @@ class TTSEngine:
         # Process clone voice chunks (batched by speaker in local mode)
         if clone_chunks:
             if self._mode == "local":
-                batch_results = self._local_batch_clone(clone_chunks, voice_config, output_dir)
+                batch_results = self._local_batch_clone(
+                    clone_chunks, voice_config, output_dir, batch_seed
+                )
             else:
                 batch_results = {"completed": [], "failed": []}
                 for chunk in clone_chunks:
@@ -1063,6 +1076,8 @@ class TTSEngine:
             voice = voice_data.get("voice", "Ryan")
             default_style = voice_data.get("default_style", "")
             seed = int(voice_data.get("seed", -1))
+            if seed < 0:
+                seed = stable_seed(speaker)
 
             instruct = instruct_text if instruct_text else (default_style if default_style else "neutral")
 
@@ -1115,6 +1130,8 @@ class TTSEngine:
                 return False
 
             seed = int(voice_data.get("seed", -1))
+            if seed < 0:
+                seed = stable_seed(speaker)
 
             import time
 
@@ -1290,7 +1307,7 @@ class TTSEngine:
 
         return results
 
-    def _local_batch_clone(self, chunks, voice_config, output_dir):
+    def _local_batch_clone(self, chunks, voice_config, output_dir, batch_seed=-1):
         """Batch generate clone voices, grouped by speaker.
 
         Chunks sharing the same speaker (same reference audio) are batched
@@ -1326,6 +1343,17 @@ class TTSEngine:
         total_audio_duration = 0.0
 
         for speaker, group in speaker_groups.items():
+            voice_data = voice_config.get(speaker, {})
+            try:
+                speaker_seed = int(voice_data.get("seed", -1))
+            except (TypeError, ValueError):
+                speaker_seed = -1
+            effective_seed = (
+                speaker_seed
+                if speaker_seed >= 0
+                else batch_seed if batch_seed >= 0 else stable_seed(speaker)
+            )
+
             try:
                 prompt = self._get_clone_prompt(speaker, voice_config)
             except Exception as e:
@@ -1361,6 +1389,8 @@ class TTSEngine:
                       f"({len(sb_texts[0])}-{len(sb_texts[-1])} chars/chunk)")
 
                 try:
+                    if effective_seed >= 0:
+                        torch.manual_seed(effective_seed)
                     t_start = time.time()
                     wavs_list, sr = model.generate_voice_clone(
                         text=sb_texts,
@@ -1603,6 +1633,8 @@ class TTSEngine:
             voice = voice_data.get("voice", "Ryan")
             default_style = voice_data.get("default_style", "")
             seed = int(voice_data.get("seed", -1))
+            if seed < 0:
+                seed = stable_seed(speaker)
 
             instruct = instruct_text if instruct_text else (default_style if default_style else "neutral")
 
@@ -1651,6 +1683,8 @@ class TTSEngine:
             ref_audio = voice_data.get("ref_audio")
             ref_text = voice_data.get("ref_text")
             seed = int(voice_data.get("seed", -1))
+            if seed < 0:
+                seed = stable_seed(speaker)
 
             if not ref_audio or not ref_text:
                 print(f"Warning: Clone voice for '{speaker}' missing ref_audio or ref_text. Skipping.")

@@ -13,6 +13,7 @@ from utils import (
     atomic_json_write as _atomic_json_write,
     canonicalize_speaker_label,
     get_data_root,
+    stable_seed,
 )
 from persona_prompts import PERSONA_SYSTEM_PROMPT, PERSONA_USER_PROMPT, PERSONA_ADVANCED_PROMPT
 
@@ -448,7 +449,19 @@ def _fallback_compiled_persona(character_ref):
 
 def _save_generated_preview(root, engine, voice_config, speaker, description, ref_text):
     try:
-        wav_path, sr = engine.generate_voice_design(description=description, sample_text=ref_text)
+        voice_entry = voice_config.get(speaker, {})
+        try:
+            seed = int(voice_entry.get("seed", -1))
+        except (TypeError, ValueError):
+            seed = -1
+        if seed < 0:
+            seed = stable_seed(speaker)
+
+        wav_path, sr = engine.generate_voice_design(
+            description=description,
+            sample_text=ref_text,
+            seed=seed,
+        )
         dest_dir = os.path.join(root, "designed_voices")
         os.makedirs(dest_dir, exist_ok=True)
         safe = sanitize_filename(speaker)
@@ -460,14 +473,13 @@ def _save_generated_preview(root, engine, voice_config, speaker, description, re
         except Exception as e:
             print(f"Warning: Could not copy preview for {speaker}: {e}")
 
-        voice_entry = voice_config.get(speaker, {})
         voice_entry.update({
             "type": "clone",
             "ref_audio": os.path.relpath(dest_path, root).replace('\\\\', '/'),
             "ref_text": ref_text,
             "description": description,
             "character_style": description,
-            "seed": -1
+            "seed": seed
         })
         voice_config[speaker] = voice_entry
 

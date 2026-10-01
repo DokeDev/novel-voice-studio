@@ -17,7 +17,7 @@ import threading
 import zipfile
 import subprocess
 import aiofiles
-from utils import atomic_json_write
+from utils import atomic_json_write, stable_seed
 from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
 from math import ceil
@@ -245,8 +245,8 @@ class TTSConfig(BaseModel):
     sub_batch_ratio: float = 5.0  # max longest/shortest length ratio before splitting
     sub_batch_max_items: int = 0  # hard cap on sequences per sub-batch (0 = auto from VRAM estimate)
     batch_group_by_type: bool = False  # group chunks by voice type for efficient batching
-    pause_between_speakers_ms: int = 500  # silence (ms) between different speakers during merge
-    pause_same_speaker_ms: int = 250  # silence (ms) when same speaker continues during merge
+    pause_between_speakers_ms: int = 800  # silence (ms) between different speakers during merge
+    pause_same_speaker_ms: int = 350  # silence (ms) when same speaker continues during merge
     model_root: Optional[str] = None
     auto_download_models: bool = False
     model_paths: Dict[str, str] = Field(default_factory=dict)
@@ -525,6 +525,8 @@ async def get_config():
             "url": "http://127.0.0.1:7860",
             "device": "auto",
             "language": "Chinese",
+            "pause_between_speakers_ms": 800,
+            "pause_same_speaker_ms": 350,
             "model_root": MODELS_DIR,
             "auto_download_models": False,
             "model_paths": {}
@@ -602,6 +604,16 @@ async def get_config():
                     config["prompts"]["persona_advanced_prompt"] = per_adv
             except RuntimeError:
                 pass
+
+    # Migrate the previous pause defaults once while preserving custom values.
+    tts_config = config.setdefault("tts", {})
+    if (
+        tts_config.get("pause_between_speakers_ms") == 500
+        and tts_config.get("pause_same_speaker_ms") == 250
+    ):
+        tts_config["pause_between_speakers_ms"] = 800
+        tts_config["pause_same_speaker_ms"] = 350
+        atomic_json_write(config, CONFIG_PATH)
 
     # Include current input file info if available
     state_path = os.path.join(ROOT_DIR, "state.json")
@@ -932,11 +944,21 @@ async def get_voices():
 
     result = []
     for voice_name in voices_list:
-        config = voice_config.get(voice_name, {})
+        config = dict(voice_config.get(voice_name, {}))
+        seed_migrated = False
+        if config:
+            try:
+                seed = int(config.get("seed", -1))
+            except (TypeError, ValueError):
+                seed = -1
+            if seed < 0:
+                config["seed"] = str(stable_seed(voice_name))
+                seed_migrated = True
         result.append({
             "name": voice_name,
             "config": config,
-            "persona_pending": voice_name in missing_speakers
+            "persona_pending": voice_name in missing_speakers,
+            "seed_migrated": seed_migrated,
         })
     return result
 
