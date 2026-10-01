@@ -88,11 +88,34 @@ ALEXANDRIA_S3_PREFIX=audiobooks
 
 ## 4. 启动和访问
 
-进入项目目录后使用启动脚本：
+### 新建或重建 Pod
+
+只要 `/workspace` 仍然保留，进入项目目录后执行：
 
 ```bash
 cd /workspace/novel-voice-studio
-chmod +x start.sh
+chmod +x bootstrap.sh start.sh
+./bootstrap.sh
+```
+
+`bootstrap.sh` 会检查并按需恢复系统音频工具、Python 虚拟环境和项目依赖，然后调用 `start.sh` 启动服务。已有且版本匹配的环境会直接复用；模型、小说、音色和生成结果不会被重新下载或删除。
+
+可选命令：
+
+```bash
+./bootstrap.sh --check       # 只检查，不安装、不启动
+./bootstrap.sh --no-start    # 安装环境，但不启动
+./bootstrap.sh --force       # 强制重建 Python 虚拟环境
+```
+
+建议继续使用带有 PyTorch、CUDA 和 cuDNN 的 RunPod GPU 镜像。脚本会复用镜像自带的 PyTorch；如果基础镜像没有 Python/PyTorch，应更换镜像，而不是在每次启动时重新下载整套 CUDA 运行时。
+
+### 日常重启
+
+环境已经安装后可直接使用启动脚本：
+
+```bash
+cd /workspace/novel-voice-studio
 ./start.sh
 ```
 
