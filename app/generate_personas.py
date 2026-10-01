@@ -9,7 +9,11 @@ import tempfile
 from openai import OpenAI
 
 from tts import TTSEngine, sanitize_filename
-from utils import atomic_json_write as _atomic_json_write
+from utils import (
+    atomic_json_write as _atomic_json_write,
+    canonicalize_speaker_label,
+    get_data_root,
+)
 from persona_prompts import PERSONA_SYSTEM_PROMPT, PERSONA_USER_PROMPT, PERSONA_ADVANCED_PROMPT
 
 
@@ -56,7 +60,7 @@ def normalize_speaker_name(name):
     s = name.strip().lower()
     # Remove common honorifics and punctuation for alias heuristics
     s = re.sub(r'^(mr|mrs|ms|miss|dr|prof|sir|lady|lord)\.?\s+', '', s)
-    s = re.sub(r'[^a-z0-9\s]', '', s)
+    s = re.sub(r'[^\w\s]', '', s, flags=re.UNICODE)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
@@ -279,7 +283,7 @@ def _unique_extend(existing, values, limit=80):
 
 
 def _entry_speaker(entry):
-    return (entry.get("speaker") or entry.get("type") or "").strip()
+    return canonicalize_speaker_label(entry.get("speaker") or entry.get("type"))
 
 
 def _entry_text(entry):
@@ -635,7 +639,8 @@ def main():
     parser.add_argument("--narration-window", type=int, default=4, help="How many preceding narrator lines to include as intro context")
     args = parser.parse_args()
 
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = get_data_root(code_root)
     script_path = os.path.join(root, "annotated_script.json")
     voice_config_path = os.path.join(root, "voice_config.json")
     app_config_path = os.environ.get("ALEXANDRIA_CONFIG_PATH") or os.path.join(

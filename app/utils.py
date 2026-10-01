@@ -1,7 +1,24 @@
 import os
 import json
+import re
 import time
 import tempfile
+
+
+def get_data_root(default_root):
+    """Return the persistent runtime data directory when one is configured."""
+    configured = os.environ.get("ALEXANDRIA_DATA_DIR")
+    root = configured if configured else default_root
+    return os.path.abspath(os.path.expanduser(root))
+
+
+def canonicalize_speaker_label(value):
+    """Normalize common narrator label variants without changing character names."""
+    label = str(value or "").strip()
+    letters_only = re.sub(r"[^A-Z]", "", label.upper())
+    if letters_only in {"NARRATOR", "NARRATION", "NARRATIVE"}:
+        return "NARRATOR"
+    return label
 
 
 def atomic_json_write(data, target_path, max_retries=5):

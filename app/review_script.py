@@ -6,6 +6,7 @@ import argparse
 from openai import OpenAI
 from review_prompts import REVIEW_SYSTEM_PROMPT, REVIEW_USER_PROMPT
 from generate_script import clean_json_string, repair_json_array, salvage_json_entries
+from utils import canonicalize_speaker_label, get_data_root
 
 
 def _is_section_break(text):
@@ -126,7 +127,8 @@ def review_batch(client, model_name, batch_entries, batch_num, total_batches,
             usage = getattr(response, 'usage', None)
 
             # Log raw response
-            log_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
+            code_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            log_dir = os.path.join(get_data_root(code_root), "logs")
             os.makedirs(log_dir, exist_ok=True)
             log_path = os.path.join(log_dir, "review_responses.log")
             with open(log_path, "a", encoding="utf-8") as lf:
@@ -255,13 +257,20 @@ def main():
     args = parser.parse_args()
 
     # Locate annotated_script.json
-    script_path = os.path.join(os.path.dirname(__file__), "..", "annotated_script.json")
+    code_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_root = get_data_root(code_root)
+    script_path = os.path.join(data_root, "annotated_script.json")
     if not os.path.exists(script_path):
         print("Error: annotated_script.json not found. Generate a script first.")
         sys.exit(1)
 
     with open(script_path, "r", encoding="utf-8") as f:
         entries = json.load(f)
+    for entry in entries:
+        if isinstance(entry, dict):
+            entry["speaker"] = canonicalize_speaker_label(
+                entry.get("speaker") or entry.get("type")
+            )
 
     print(f"Loaded {len(entries)} script entries for review")
 
@@ -503,7 +512,7 @@ def main():
         json.dump(all_corrected, f, indent=2, ensure_ascii=False)
 
     # Delete chunks.json so editor regenerates
-    chunks_path = os.path.join(os.path.dirname(__file__), "..", "chunks.json")
+    chunks_path = os.path.join(data_root, "chunks.json")
     if os.path.exists(chunks_path):
         os.remove(chunks_path)
         print("Cleared old chunks.json")

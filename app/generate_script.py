@@ -5,6 +5,7 @@ import re
 import argparse
 from openai import OpenAI
 from default_prompts import DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_PROMPT
+from utils import canonicalize_speaker_label, get_data_root
 
 # Cap for single-speaker mode: entries at this size pass through
 # group_into_chunks (MAX_CHUNK_CHARS=500) as-is without further splitting.
@@ -93,6 +94,10 @@ def repair_json_array(json_text):
     def _filter_entries(lst):
         """Keep only dict entries; LLMs sometimes emit bare strings in the array."""
         filtered = [e for e in lst if isinstance(e, dict)]
+        for entry in filtered:
+            entry["speaker"] = canonicalize_speaker_label(
+                entry.get("speaker") or entry.get("type")
+            )
         if len(filtered) < len(lst):
             print(f"  Warning: Dropped {len(lst) - len(filtered)} non-object entries from LLM JSON array")
         return filtered if filtered else None
@@ -165,7 +170,7 @@ def salvage_json_entries(json_text):
     for match in matches:
         try:
             entry = {
-                "speaker": match.group(1),
+                "speaker": canonicalize_speaker_label(match.group(1)),
                 "text": match.group(2).replace('\\"', '"').replace('\\n', '\n'),
                 "instruct": match.group(3).replace('\\"', '"').replace('\\n', '\n')
             }
@@ -290,7 +295,8 @@ def process_chunk(client, model_name, chunk, chunk_num, total_chunks, previous_e
             usage = getattr(response, 'usage', None)
 
             # Log raw response for debugging
-            log_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
+            code_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            log_dir = os.path.join(get_data_root(code_root), "logs")
             os.makedirs(log_dir, exist_ok=True)
             log_path = os.path.join(log_dir, "llm_responses.log")
             with open(log_path, "a", encoding="utf-8") as lf:
@@ -352,11 +358,14 @@ def process_chunk(client, model_name, chunk, chunk_num, total_chunks, previous_e
 
 def _write_script_output(all_entries):
     """Write annotated_script.json and clear stale chunks.json."""
-    output_path = os.path.join("..", "annotated_script.json")
+    code_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_root = get_data_root(code_root)
+    os.makedirs(data_root, exist_ok=True)
+    output_path = os.path.join(data_root, "annotated_script.json")
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(all_entries, f, indent=2, ensure_ascii=False)
 
-    chunks_path = os.path.join("..", "chunks.json")
+    chunks_path = os.path.join(data_root, "chunks.json")
     if os.path.exists(chunks_path):
         os.remove(chunks_path)
         print("Cleared old chunks.json")
