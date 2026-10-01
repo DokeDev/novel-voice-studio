@@ -718,7 +718,7 @@ def main():
     # can trigger HIP kernel errors on ROCm.
     tts_cfg = dict(config.get("tts", {}))
     tts_cfg["compile_codec"] = False
-    engine = TTSEngine({"tts": tts_cfg})
+    engine = TTSEngine({"tts": tts_cfg}, data_root=root)
 
     selected_speakers = list(samples.keys())
     if args.new_only:

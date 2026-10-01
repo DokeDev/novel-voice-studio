@@ -8,7 +8,7 @@ import numpy as np
 import soundfile as sf
 from pydub import AudioSegment
 from model_manager import ModelManager
-from utils import stable_seed
+from utils import get_data_root, resolve_data_path, stable_seed
 
 DEFAULT_PAUSE_MS = 800  # Pause between different speakers
 SAME_SPEAKER_PAUSE_MS = 350  # Shorter pause for same speaker continuing
@@ -98,8 +98,10 @@ class TTSEngine:
     Models and clients are lazily initialized on first use.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, data_root=None):
         tts_config = config.get("tts", {})
+        self._code_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self._data_root = os.path.abspath(data_root or get_data_root(self._code_root))
         self._mode = tts_config.get("mode", "external")
         self._url = tts_config.get("url", "http://127.0.0.1:7860")
         self._device = tts_config.get("device", "auto")
@@ -663,10 +665,9 @@ class TTSEngine:
 
         if not ref_audio_path or not ref_text:
             raise ValueError(f"Clone voice for '{speaker}' missing ref_audio or ref_text")
-        # Resolve relative paths against project root (parent of app/)
-        if not os.path.isabs(ref_audio_path):
-            root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            ref_audio_path = os.path.join(root_dir, ref_audio_path)
+        ref_audio_path = resolve_data_path(
+            ref_audio_path, self._data_root, fallback_root=self._code_root
+        )
         if not os.path.exists(ref_audio_path):
             raise FileNotFoundError(f"Reference audio not found for '{speaker}': {ref_audio_path}")
 
@@ -841,10 +842,9 @@ class TTSEngine:
                 print(f"Error: No adapter_path in voice_data")
                 return False
 
-            # Resolve relative paths against project root
-            if not os.path.isabs(adapter_path):
-                root_dir = os.path.dirname(os.path.dirname(__file__))
-                adapter_path = os.path.join(root_dir, adapter_path)
+            adapter_path = resolve_data_path(
+                adapter_path, self._data_root, fallback_root=self._code_root
+            )
 
             if not os.path.isdir(adapter_path):
                 print(f"Error: LoRA adapter path not found: {adapter_path}")
@@ -1448,8 +1448,6 @@ class TTSEngine:
         import time
 
         results = {"completed": [], "failed": []}
-        root_dir = os.path.dirname(os.path.dirname(__file__))
-
         # Group chunks by adapter_path (resolved to absolute)
         adapter_groups = {}  # adapter_path -> (voice_data, [chunks])
         for chunk in chunks:
@@ -1461,8 +1459,9 @@ class TTSEngine:
                 results["failed"].append((chunk["index"], "No adapter_path"))
                 continue
 
-            if not os.path.isabs(adapter_path):
-                adapter_path = os.path.join(root_dir, adapter_path)
+            adapter_path = resolve_data_path(
+                adapter_path, self._data_root, fallback_root=self._code_root
+            )
 
             if adapter_path not in adapter_groups:
                 adapter_groups[adapter_path] = (voice_data, [])
@@ -1690,10 +1689,9 @@ class TTSEngine:
                 print(f"Warning: Clone voice for '{speaker}' missing ref_audio or ref_text. Skipping.")
                 return False
 
-            # Resolve relative paths against project root
-            if not os.path.isabs(ref_audio):
-                root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                ref_audio = os.path.join(root_dir, ref_audio)
+            ref_audio = resolve_data_path(
+                ref_audio, self._data_root, fallback_root=self._code_root
+            )
 
             if not os.path.exists(ref_audio):
                 print(f"Warning: Reference audio not found for '{speaker}': {ref_audio}")

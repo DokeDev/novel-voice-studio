@@ -125,7 +125,7 @@ class ProjectManager:
                 pass
 
         try:
-            self.engine = TTSEngine(config)
+            self.engine = TTSEngine(config, data_root=self.root_dir)
             print(f"TTS engine initialized (mode={self.engine.mode})")
             return self.engine
         except Exception as e:

@@ -13,6 +13,18 @@ def get_data_root(default_root):
     return os.path.abspath(os.path.expanduser(root))
 
 
+def resolve_data_path(path, data_root, fallback_root=None):
+    """Resolve a relative asset path, with optional legacy-root fallback."""
+    if os.path.isabs(path):
+        return path
+    resolved = os.path.abspath(os.path.join(data_root, path))
+    if fallback_root and not os.path.exists(resolved):
+        fallback = os.path.abspath(os.path.join(fallback_root, path))
+        if os.path.exists(fallback):
+            return fallback
+    return resolved
+
+
 def canonicalize_speaker_label(value):
     """Normalize common narrator label variants without changing character names."""
     label = str(value or "").strip()
